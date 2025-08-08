@@ -1,6 +1,6 @@
 # Ceres
 
-A (very experimental) GameBoy/Color emulator written in rust.
+A (very experimental) GameBoy/Color emulator written in rust. :)
 
 ![logo](https://github.com/remind-me-later/ceres-images/blob/main/ceres.webp?raw=true)
 
