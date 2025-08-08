@@ -1,0 +1,52 @@
+[package]
+name = "ceres-std"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies.bytemuck]
+version = "*"
+default-features = false
+
+[dependencies.ceres-core]
+path = "../ceres-core"
+
+[dependencies.clap]
+version = "*"
+default-features = false
+features = ["derive", "help", "std"]
+
+[dependencies.cpal]
+version = "*"
+default-features = false
+
+[dependencies.ringbuf]
+version = "*"
+default-features = false
+features = ["std"]
+
+[dependencies.rubato]
+version = "*"
+default-features = false
+
+[dependencies.spin_sleep]
+version = "*"
+default-features = false
+
+[dependencies.thread-priority]
+version = "*"
+default-features = false
+
+[dependencies.wgpu]
+version = "25"
+default-features = false
+features = ["dx12", "metal", "vulkan", "wgsl"]
+optional = true
+
+[features]
+wgpu_renderer = ["dep:wgpu"]
+
+[lints]
+workspace = true
+
