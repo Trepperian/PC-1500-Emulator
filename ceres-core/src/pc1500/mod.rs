@@ -3,14 +3,13 @@
 /// This module contains the complete PC-1500 system implementation,
 /// following the same modular structure as the GameBoy emulation.
 pub mod cpu;
-pub mod control_instructions;
 pub mod display;
 pub mod joypad;
 pub mod keyboard;
 pub mod memory;
 
 use crate::AudioCallback;
-use cpu::Lh5801Cpu;
+pub use cpu::Lh5801Cpu;
 use display::DisplayController;
 use keyboard::KeyboardController;
 use memory::MemoryBus;
