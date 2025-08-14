@@ -1534,9 +1534,15 @@ impl Lh5801Cpu {
                 13
             } // ANI #(ab),i
 
-            // AM0/AM1 - Address mode
-            // 0xCE removed - conflicts with VEJ CE opcode
-            0xDE => self.am1(memory), // AM1 - returns cycles
+            // AM0/AM1 - Timer control instructions  
+            0xCE => {
+                self.am0(memory);
+                9  // 9 cycles according to PC-1500 manual
+            } // AM0 - Acc to Tm and 0 (FD CE)
+            0xDE => {
+                self.am1(memory);
+                9  // 9 cycles according to PC-1500 manual
+            } // AM1 - Acc to Tm and 1 (FD DE)
 
             // ATP/ATT - Address transfer
             // 0xCC removed - conflicts with VEJ CC opcode
@@ -1847,11 +1853,7 @@ impl Lh5801Cpu {
                 8
             } // RIE
 
-            // AM0/LDX - Load/store operations
-            0xCE => {
-                self.am0(memory);
-                8
-            } // AM0 - Address mode 0
+            // LDX - Load/store operations 
             0xD8 => {
                 self.ldx_x();
                 8
@@ -3017,6 +3019,7 @@ impl Lh5801Cpu {
     /// AM0 (Acc to Tm and 0) - Transfers accumulator to timer register and sets TM8 to 0
     /// Format: AM0
     /// Operation: A → TM (TM0~TM7), 0 → TM8
+    /// Opcode: FD CE (0xFD 0xCE)
     /// Cycles: 9 (from PC-1500 manual)
     /// Notes: No change takes place in other flags
     pub(super) fn am0(&mut self, _memory: &mut crate::pc1500::memory::MemoryBus) -> u8 {
@@ -3034,6 +3037,7 @@ impl Lh5801Cpu {
     /// AM1 (Acc to Tm and 1) - Transfers accumulator to timer register and sets TM8 to 1
     /// Format: AM1
     /// Operation: A → TM (TM0~TM7), 1 → TM8
+    /// Opcode: FD DE (0xFD 0xDE)
     /// Cycles: 9 (from PC-1500 manual)
     /// Notes: Same as AM0, but "1" is entered in the highest order bit
     pub(super) fn am1(&mut self, _memory: &mut crate::pc1500::memory::MemoryBus) -> u8 {
