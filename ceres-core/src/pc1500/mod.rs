@@ -4,13 +4,16 @@
 /// following the same modular structure as the GameBoy emulation.
 pub mod cpu;
 pub mod display;
+pub mod interrupts;
 pub mod joypad;
 pub mod keyboard;
 pub mod memory;
+pub mod timing;
 
 use crate::AudioCallback;
 pub use cpu::Lh5801Cpu;
 use display::DisplayController;
+use interrupts::InterruptController;
 use keyboard::KeyboardController;
 use memory::MemoryBus;
 
@@ -38,7 +41,9 @@ pub struct Pc1500<A: AudioCallback> {
     cpu: Lh5801Cpu,
     memory: MemoryBus,
     keyboard: KeyboardController,
+    interrupt_controller: InterruptController,
     audio_callback: A,
+    timer: timing::Timer,
 
     // Timing (following GameBoy pattern)
     cycles_run: u64,
@@ -53,9 +58,11 @@ impl<A: AudioCallback> Pc1500<A> {
             cpu: Lh5801Cpu::new(),
             memory: MemoryBus::new(),
             keyboard: KeyboardController::new(),
+            interrupt_controller: InterruptController::new(),
             audio_callback,
+            timer: timing::Timer::new(),
             cycles_run: 0,
-            target_cycles_per_frame: 1000, // Placeholder - adjust for actual timing
+            target_cycles_per_frame: timing::CYCLES_PER_FRAME as u64,
         }
     }
 
@@ -80,15 +87,46 @@ impl<A: AudioCallback> Pc1500<A> {
 
     /// Run one CPU instruction (following GameBoy's run_cpu pattern)
     pub fn run_cpu(&mut self) {
+        // Store previous timer register value for comparison
+        let prev_timer_reg = self.cpu.get_timer_register();
+        
         // Execute one CPU instruction
         let cycles = self.cpu.step(&mut self.memory);
         self.cycles_run += cycles as u64;
 
-        // Handle interrupts if needed
-        if self.cpu.should_handle_interrupt() {
-            // TODO: Check for pending interrupts
-            // For now, just keyboard interrupts
-            self.cpu.handle_interrupt(0x0000);
+        // Check if AM0/AM1 instruction was executed by comparing timer register
+        let new_timer_reg = self.cpu.get_timer_register();
+        if prev_timer_reg != new_timer_reg {
+            // AM0/AM1 instruction was executed, synchronize system timer
+            let accumulator_value = (new_timer_reg & 0xFF) as u8;
+            let tm8_bit = (new_timer_reg & 0x100) != 0;
+            
+            if tm8_bit {
+                self.timer.set_am1(accumulator_value);
+            } else {
+                self.timer.set_am0(accumulator_value);
+            }
+        }
+
+        // Run timer for the cycles executed
+        let timer_interrupt = self.timer.run_cycles(cycles as u32);
+        
+        // Request timer interrupt if timer overflowed
+        if timer_interrupt {
+            self.interrupt_controller.request_timer_interrupt();
+        }
+
+        // Synchronize CPU interrupt enable state with interrupt controller
+        if self.cpu.interrupt_enabled() {
+            self.interrupt_controller.set_ie();
+        } else {
+            self.interrupt_controller.reset_ie();
+        }
+
+        // Check for pending interrupts and handle them
+        if let Some(vector) = self.interrupt_controller.check_pending_interrupt() {
+            self.cpu.handle_interrupt(vector, &mut self.memory);
+            self.interrupt_controller.start_interrupt_processing();
         }
     }
 
@@ -146,6 +184,40 @@ impl<A: AudioCallback> Pc1500<A> {
     #[must_use]
     pub const fn cycles_run(&self) -> u64 {
         self.cycles_run
+    }
+
+    /// Get timer counter value (for debugging)
+    #[must_use]
+    pub const fn timer_counter(&self) -> u16 {
+        self.timer.counter()
+    }
+
+    /// Check if timer is enabled (for debugging)
+    #[must_use]
+    pub const fn timer_enabled(&self) -> bool {
+        self.timer.is_enabled()
+    }
+
+    /// Get CPU timer register (for debugging)
+    #[must_use]
+    pub const fn cpu_timer_register(&self) -> u16 {
+        self.cpu.get_timer_register()
+    }
+
+    /// Request a maskable interrupt (for keyboard input, etc.)
+    pub fn request_maskable_interrupt(&mut self) {
+        self.interrupt_controller.request_maskable_interrupt();
+    }
+
+    /// Get interrupt controller status (for debugging)
+    pub fn interrupt_status(&self) -> interrupts::InterruptStatus {
+        self.interrupt_controller.get_status()
+    }
+
+    /// Check if interrupts are enabled
+    #[must_use]
+    pub const fn interrupts_enabled(&self) -> bool {
+        self.interrupt_controller.ie_enabled()
     }
 
     /// Display a message on the LCD screen
