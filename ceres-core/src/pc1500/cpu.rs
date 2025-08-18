@@ -512,29 +512,30 @@ impl Lh5801Cpu {
         // Start interrupt processing sequence
         // 1. Save current IE flag state to stack (part of context save)
         let ie_state = if self.interrupt_enabled { 1u8 } else { 0u8 };
-        
+
         // 2. Disable interrupts (IE = 0)
         self.interrupt_enabled = false;
-        
+
         // 3. Save Program Counter to stack (PH first, then PL)
         self.s = self.s.wrapping_sub(1);
         self.write(memory, self.s, (self.p >> 8) as u8); // PH
         self.s = self.s.wrapping_sub(1);
         self.write(memory, self.s, (self.p & 0xFF) as u8); // PL
-        
+
         // 4. Save IE flag state to stack
         self.s = self.s.wrapping_sub(1);
         self.write(memory, self.s, ie_state);
-        
+
         // 5. Load interrupt vector address
         // Vector points to address where interrupt routine address is stored
         let interrupt_routine_low = self.read(memory, vector);
         let interrupt_routine_high = self.read(memory, vector + 1);
-        let interrupt_routine_addr = ((interrupt_routine_high as u16) << 8) | (interrupt_routine_low as u16);
-        
+        let interrupt_routine_addr =
+            ((interrupt_routine_high as u16) << 8) | (interrupt_routine_low as u16);
+
         // 6. Jump to interrupt processing routine
         self.p = interrupt_routine_addr;
-        
+
         // 7. Clear halt state if CPU was halted
         self.is_halted = false;
         self.halted = false;
@@ -547,13 +548,13 @@ impl Lh5801Cpu {
         let ie_state = self.read(memory, self.s);
         self.s = self.s.wrapping_add(1);
         self.interrupt_enabled = ie_state != 0;
-        
+
         // 2. Restore Program Counter from stack (PL first, then PH)
         let pl = self.read(memory, self.s);
         self.s = self.s.wrapping_add(1);
         let ph = self.read(memory, self.s);
         self.s = self.s.wrapping_add(1);
-        
+
         // 3. Restore Program Counter
         self.p = ((ph as u16) << 8) | (pl as u16);
     }
@@ -1534,14 +1535,14 @@ impl Lh5801Cpu {
                 13
             } // ANI #(ab),i
 
-            // AM0/AM1 - Timer control instructions  
+            // AM0/AM1 - Timer control instructions
             0xCE => {
                 self.am0(memory);
-                9  // 9 cycles according to PC-1500 manual
+                9 // 9 cycles according to PC-1500 manual
             } // AM0 - Acc to Tm and 0 (FD CE)
             0xDE => {
                 self.am1(memory);
-                9  // 9 cycles according to PC-1500 manual
+                9 // 9 cycles according to PC-1500 manual
             } // AM1 - Acc to Tm and 1 (FD DE)
 
             // ATP/ATT - Address transfer
@@ -1853,7 +1854,7 @@ impl Lh5801Cpu {
                 8
             } // RIE
 
-            // LDX - Load/store operations 
+            // LDX - Load/store operations
             0xD8 => {
                 self.ldx_x();
                 8
@@ -3027,10 +3028,10 @@ impl Lh5801Cpu {
         self.timer_register = (self.timer_register & 0xFF00) | (self.a as u16);
         // Clear TM8 (bit 8 of timer register)
         self.timer_register &= 0x00FF;
-        
+
         // Note: Timer interaction will be handled at system level in mod.rs
         // This instruction sets the internal CPU timer register
-        
+
         9 // 9 cycles (corrected from PC-1500 manual)
     }
 
@@ -3045,10 +3046,10 @@ impl Lh5801Cpu {
         self.timer_register = (self.timer_register & 0xFF00) | (self.a as u16);
         // Set TM8 (bit 8 of timer register)
         self.timer_register |= 0x0100;
-        
+
         // Note: Timer interaction will be handled at system level in mod.rs
         // This instruction sets the internal CPU timer register
-        
+
         9 // 9 cycles (corrected from PC-1500 manual)
     }
 
@@ -4063,7 +4064,7 @@ impl Lh5801Cpu {
         // Use the dedicated return from interrupt method
         // This follows the PC-1500 interrupt processing sequence exactly
         self.return_from_interrupt(memory);
-        
+
         14 // 14 cycles according to PC-1500 manual timing
     }
 }
