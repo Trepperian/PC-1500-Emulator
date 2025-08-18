@@ -31,7 +31,7 @@ pub struct Pc1500InstructionTracer {
 impl Pc1500InstructionTracer {
     pub fn new() -> Self {
         let emulator = Pc1500::new(
-            ceres_core::pc1500::Pc1500Model::Pc1500,
+            ceres_core::Model::Pc1500,
             NoAudio
         );
 

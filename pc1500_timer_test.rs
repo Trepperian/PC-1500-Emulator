@@ -15,7 +15,7 @@ fn main() -> io::Result<()> {
     
     // Crear instancia del PC-1500
     let mut pc1500 = ceres_core::pc1500::Pc1500::new(
-        ceres_core::pc1500::Pc1500Model::Pc1500,
+        ceres_core::Model::Pc1500,
         DummyAudio
     );
 

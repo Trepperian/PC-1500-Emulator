@@ -7,7 +7,7 @@
 #[path = "../ceres/src/video.rs"]
 mod video;
 
-use ceres_core::{AudioCallback, Pc1500, Pc1500Model, Sample};
+use ceres_core::{AudioCallback, Pc1500, Model, Sample};
 use ceres_std::{ShaderOption, wgpu_renderer::ScalingOption};
 use winit::{
     application::ApplicationHandler,
@@ -46,7 +46,7 @@ pub struct Pc1500DisplayTest {
 impl Pc1500DisplayTest {
     pub fn new() -> Self {
         let audio_callback = Pc1500AudioCallback;
-        let mut pc1500 = Pc1500::new(Pc1500Model::Pc1500, audio_callback);
+        let mut pc1500 = Pc1500::new(Model::Pc1500);
         
         // Initialize
         pc1500.init_test_mode();

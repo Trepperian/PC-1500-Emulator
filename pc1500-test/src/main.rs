@@ -41,7 +41,7 @@ impl Pc1500RomTester {
     /// Create new ROM tester with authentic PC-1500 ROM
     pub fn new() -> Self {
         let emulator = Pc1500::new(
-            ceres_core::pc1500::Pc1500Model::Pc1500,
+            ceres_core::Model::Pc1500,
             NoAudio
         );
 

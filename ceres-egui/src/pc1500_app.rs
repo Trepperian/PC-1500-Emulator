@@ -11,7 +11,7 @@
 /// NEVER SIMPLIFY OR REMOVE FUNCTIONALITY FROM THIS FILE
 
 use eframe::egui;
-use ceres_core::{pc1500::Pc1500, AudioCallback, pc1500::Pc1500Model};
+use ceres_core::{Pc1500, AudioCallback, Model};
 use ceres_core::pc1500::joypad::Key as Pc1500Key;
 use std::collections::HashSet;
 
@@ -69,7 +69,7 @@ pub struct Pc1500App {
 impl Pc1500App {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let audio = Pc1500AudioCallback;
-        let mut emulator = Pc1500::new(Pc1500Model::default(), audio);
+        let mut emulator = Pc1500::new(Model::default());
         
         // Initialize in test mode by default
         emulator.init_test_mode();

@@ -29,7 +29,7 @@ pub struct Pc1500BehaviorObserver {
 impl Pc1500BehaviorObserver {
     pub fn new() -> Self {
         let emulator = Pc1500::new(
-            ceres_core::pc1500::Pc1500Model::Pc1500,
+            ceres_core::Model::Pc1500,
             NoAudio
         );
 

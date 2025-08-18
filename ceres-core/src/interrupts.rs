@@ -1,86 +1,164 @@
-const VBLANK: u8 = 1;
-const LCD: u8 = 2;
-const TIMER: u8 = 4;
-const SERIAL: u8 = 8;
-const P1: u8 = 16;
+/// PC-1500 Interrupt System Implementation
+/// 
+/// Based on PC-1500 Technical Manual interrupt processing diagrams:
+/// - Timer interrupt processing sequence
+/// - Maskable interrupt processing sequence  
+/// - RTI (Return from interrupt) instruction support
+/// - Interrupt enable/disable via IE flag
 
+// PC-1500 interrupt types
+const MASKABLE: u8 = 1;   // MI (Maskable Interrupt)
+const TIMER: u8 = 2;      // Timer interrupt
+
+/// Interrupt request flags
+const IR1_ACTIVE: u8 = 1; // IR1 active (maskable interrupt)  
+const IR2_ACTIVE: u8 = 2; // IR2 active (timer interrupt)
+
+/// PC-1500 Interrupt Controller
+/// Handles timer interrupts and maskable interrupts according to PC-1500 specifications
 #[derive(Default, Debug)]
-pub struct Interrupts {
-    ime: bool,
-    ifr: u8,
-    ie: u8,
+pub struct InterruptController {
+    /// IE flag - Interrupt Enable (controlled by SIE/RIE instructions)
+    ie_flag: bool,
+    
+    /// IR1 - Maskable interrupt request flag
+    ir1_active: bool,
+    
+    /// IR2 - Timer interrupt request flag  
+    ir2_active: bool,
+    
+    /// Currently processing interrupt (prevents nested interrupts)
+    processing_interrupt: bool,
 }
 
-impl Interrupts {
-    pub const fn illegal(&mut self) {
-        self.ie = 0;
+impl InterruptController {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    #[must_use]
-    pub fn handle(&mut self) -> u16 {
-        let ints = self.ifr & self.ie;
-        let tz = (ints.trailing_zeros() & 7) as u16;
-        // get rightmost interrupt
-        let int = u8::from(ints != 0) << tz;
-        // acknowledge
-        self.ifr &= !int;
-        // compute direction of interrupt vector
-        0x40 | (tz << 3)
+    /// Set IE flag (via SIE instruction)
+    pub fn set_ie(&mut self) {
+        self.ie_flag = true;
     }
 
-    #[must_use]
-    pub const fn is_any_requested(&self) -> bool {
-        self.ifr & self.ie != 0
+    /// Reset IE flag (via RIE instruction)  
+    pub fn reset_ie(&mut self) {
+        self.ie_flag = false;
     }
 
-    pub const fn enable(&mut self) {
-        self.ime = true;
+    /// Get IE flag status
+    pub const fn ie_enabled(&self) -> bool {
+        self.ie_flag
     }
 
-    pub const fn disable(&mut self) {
-        self.ime = false;
+    /// Request timer interrupt (when timer overflows to 1FFH)
+    pub fn request_timer_interrupt(&mut self) {
+        self.ir2_active = true;
     }
 
-    #[must_use]
-    pub const fn are_enabled(&self) -> bool {
-        self.ime
+    /// Request maskable interrupt (MI input sampled)
+    pub fn request_maskable_interrupt(&mut self) {
+        self.ir1_active = true;
     }
 
-    pub const fn request_p1(&mut self) {
-        self.ifr |= P1;
+    /// Request P1 interrupt (keyboard/input device)
+    /// In PC-1500, keyboard input generates maskable interrupts
+    /// This method provides compatibility with keyboard controller
+    pub fn request_p1(&mut self) {
+        // P1 interrupt maps to maskable interrupt for keyboard input
+        // This is the standard way keyboard input triggers interrupts in PC-1500
+        self.request_maskable_interrupt();
     }
 
-    pub const fn request_serial(&mut self) {
-        self.ifr |= SERIAL;
+    /// Clear timer interrupt request
+    pub fn clear_timer_interrupt(&mut self) {
+        self.ir2_active = false;
     }
 
-    pub const fn request_vblank(&mut self) {
-        self.ifr |= VBLANK;
+    /// Clear maskable interrupt request
+    pub fn clear_maskable_interrupt(&mut self) {
+        self.ir1_active = false;
     }
 
-    pub const fn request_lcd(&mut self) {
-        self.ifr |= LCD;
+    /// Check if any interrupt is pending and enabled
+    /// Returns the interrupt vector address if an interrupt should be processed
+    pub fn check_pending_interrupt(&mut self) -> Option<u16> {
+        // If IE flag is not set, no interrupts are processed
+        if !self.ie_flag {
+            return None;
+        }
+
+        // If already processing an interrupt, don't process another
+        if self.processing_interrupt {
+            return None;
+        }
+
+        // Timer interrupt has higher priority (IR2)
+        if self.ir2_active {
+            self.processing_interrupt = true;
+            self.clear_timer_interrupt();
+            // Timer interrupt vector from FFFAH/FFFBH addresses
+            return Some(0xFFFB);
+        }
+
+        // Maskable interrupt (IR1) 
+        if self.ir1_active {
+            self.processing_interrupt = true;
+            self.clear_maskable_interrupt();
+            // Maskable interrupt vector (generic address for now)
+            return Some(0xFFFA);
+        }
+
+        None
     }
 
-    pub const fn request_timer(&mut self) {
-        self.ifr |= TIMER;
+    /// Start interrupt processing sequence
+    /// Called when CPU begins executing interrupt
+    pub fn start_interrupt_processing(&mut self) {
+        self.processing_interrupt = true;
+        // IE flag is automatically reset when interrupt processing starts
+        self.ie_flag = false;
     }
 
-    #[must_use]
-    pub const fn read_if(&self) -> u8 {
-        self.ifr | 0xE0
+    /// Complete interrupt processing (called by RTI instruction)
+    /// This restores the IE flag and allows new interrupts
+    pub fn complete_interrupt_processing(&mut self) {
+        self.processing_interrupt = false;
+        // Note: IE flag restoration is handled by RTI instruction
+        // which restores the previous IE state from the stack
     }
 
-    #[must_use]
-    pub const fn read_ie(&self) -> u8 {
-        self.ie
+    /// Check if timer interrupt is requested
+    pub const fn timer_interrupt_requested(&self) -> bool {
+        self.ir2_active
     }
 
-    pub const fn write_if(&mut self, val: u8) {
-        self.ifr = val & 0x1F;
+    /// Check if maskable interrupt is requested  
+    pub const fn maskable_interrupt_requested(&self) -> bool {
+        self.ir1_active
     }
 
-    pub const fn write_ie(&mut self, val: u8) {
-        self.ie = val;
+    /// Check if currently processing an interrupt
+    pub const fn is_processing_interrupt(&self) -> bool {
+        self.processing_interrupt
     }
+
+    /// Get interrupt status for debugging
+    pub fn get_status(&self) -> InterruptStatus {
+        InterruptStatus {
+            ie_flag: self.ie_flag,
+            ir1_active: self.ir1_active,
+            ir2_active: self.ir2_active,
+            processing_interrupt: self.processing_interrupt,
+        }
+    }
+}
+
+/// Interrupt status for debugging and inspection
+#[derive(Debug, Clone)]
+pub struct InterruptStatus {
+    pub ie_flag: bool,
+    pub ir1_active: bool,
+    pub ir2_active: bool,
+    pub processing_interrupt: bool,
 }

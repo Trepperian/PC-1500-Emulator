@@ -1,7 +1,7 @@
 /// Test simple para verificar que la escritura en memoria funciona
 /// Basado en el pc1500_window que SÍ funcionaba
 
-use ceres_core::{AudioCallback, Pc1500, Pc1500Model, Sample};
+use ceres_core::{AudioCallback, Pc1500, Model, Sample};
 
 /// Audio callback simple
 struct SimpleAudioCallback;
@@ -17,7 +17,7 @@ fn main() {
     println!("=====================================");
     
     let audio_callback = SimpleAudioCallback;
-    let mut pc1500 = Pc1500::new(Pc1500Model::Pc1500, audio_callback);
+    let mut pc1500 = Pc1500::new(Model::Pc1500);
     
     println!("✅ PC-1500 created");
     

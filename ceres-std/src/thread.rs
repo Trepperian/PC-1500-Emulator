@@ -1,5 +1,5 @@
-use crate::audio;
-use ceres_core::GbBuilder;
+//use crate::audio;
+use ceres_core::Pc1500Builder;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering::Relaxed;
 use std::{
@@ -8,25 +8,25 @@ use std::{
 };
 use thread_priority::ThreadBuilderExt;
 
-use {ceres_core::Gb, std::path::Path, std::sync::Arc};
+use {ceres_core::Pc1500, std::path::Path, std::sync::Arc};
 
 pub trait PainterCallback: Send {
     fn paint(&self, pixel_data_rgba: &[u8]);
     fn request_repaint(&self);
 }
 
-pub struct GbThread {
-    gb: Arc<Mutex<Gb<audio::AudioCallbackImpl>>>,
+pub struct Pc1500Thread {
+    pc1500: Arc<Mutex<Pc1500>>,
     model: ceres_core::Model,
     exiting: Arc<AtomicBool>,
     pause_thread: Arc<AtomicBool>,
-    _audio_state: audio::AudioState,
-    audio_stream: audio::Stream,
+    //_audio_state: audio::AudioState,
+    //audio_stream: audio::Stream,
     thread_handle: Option<std::thread::JoinHandle<()>>,
     multiplier: Arc<AtomicU32>,
 }
 
-impl GbThread {
+impl Pc1500Thread {
     pub fn new<P: PainterCallback + 'static>(
         model: ceres_core::Model,
         sav_path: Option<&Path>,
@@ -34,7 +34,7 @@ impl GbThread {
         ctx: P,
     ) -> Result<Self, Error> {
         fn gb_loop<P: PainterCallback>(
-            gb: &Arc<Mutex<Gb<audio::AudioCallbackImpl>>>,
+            pc1500: &Arc<Mutex<Pc1500>>,
             exiting: &Arc<AtomicBool>,
             pause_thread: &Arc<AtomicBool>,
             multiplier: &Arc<AtomicU32>,
@@ -48,7 +48,7 @@ impl GbThread {
 
             while !exiting.load(Relaxed) {
                 if !pause_thread.load(Relaxed) {
-                    if let Ok(mut gb) = gb.lock() {
+                    if let Ok(mut gb) = pc1500.lock() {
                         gb.run_frame();
                         ctx.paint(gb.pixel_data_rgba());
                     }
@@ -66,10 +66,10 @@ impl GbThread {
             }
         }
 
-        let audio_state = audio::AudioState::new().map_err(Error::Audio)?;
+        //let audio_state = audio::AudioState::new().map_err(Error::Audio)?;
 
-        let audio_stream = audio::Stream::new(&audio_state).map_err(Error::Audio)?;
-        let ring_buffer = audio_stream.get_ring_buffer();
+        //let audio_stream = audio::Stream::new(&audio_state).map_err(Error::Audio)?;
+        //let ring_buffer = audio_stream.get_ring_buffer();
 
         let gb = Self::create_new_gb(&audio_stream, ring_buffer, model, rom_path, sav_path)?;
         let gb = Arc::new(Mutex::new(gb));

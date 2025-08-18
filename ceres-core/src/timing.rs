@@ -1,155 +1,144 @@
-use crate::{AudioCallback, Gb};
+/// PC-1500 Timer Implementation
+/// 
+/// Based on PC-1500 Technical Manual Section 2-3-1:
+/// - 9-bit polynomial counter (0x000-0x1FF)
+/// - Set by AM0/AM1 CPU instructions
+/// - Operates continuously, increments every φF cycle
+/// - Issues interrupt request when reaching 1FFH
+/// - With 4MHz crystal: φF = 31.25kHz, so timer increments every 32μsec
+
 use core::time::Duration;
 
-pub const FRAME_DURATION: Duration = Duration::new(0, 16_742_706);
-pub const TC_PER_FRAME: i32 = 70224; // t-cycles per frame
+// PC-1500 specific timing constants
+pub const FRAME_DURATION: Duration = Duration::new(0, 16_666_667); // ~60 Hz for PC-1500
+pub const CYCLES_PER_FRAME: u32 = 128000; // Approximately for 4MHz / 60Hz
 
-// t-cycles per second
-pub const TC_SEC: i32 = 0x40_0000; // 2^22
+// Timer frequency: φF = 31.25kHz with 4MHz crystal (4MHz / 2 / 64 = 31.25kHz)
+pub const TIMER_FREQUENCY_HZ: u32 = 31250; // 31.25 kHz
+pub const CPU_FREQUENCY_HZ: u32 = 4_000_000; // 4 MHz
+pub const TIMER_CYCLES_PER_INCREMENT: u32 = CPU_FREQUENCY_HZ / TIMER_FREQUENCY_HZ; // 128 cycles
 
 #[derive(Default, Debug)]
-pub struct Clock {
-    tima: u8,
-    tma: u8,
-    tac: u8,
-    div: u16,
-    tima_state: TIMAState,
+pub struct Timer {
+    /// 9-bit timer counter (0x000-0x1FF)
+    counter: u16,
+    /// Accumulated CPU cycles for timer increment
+    cycle_accumulator: u32,
+    /// Timer enabled state
+    enabled: bool,
 }
 
-impl Clock {
-    pub const fn tima(&self) -> u8 {
-        self.tima
-    }
-
-    pub const fn tma(&self) -> u8 {
-        self.tma
-    }
-}
-
-#[derive(Clone, Copy, Default, Debug)]
-pub enum TIMAState {
-    Reloading,
-    Reloaded,
-    #[default]
-    Running,
-}
-
-impl<A: AudioCallback> Gb<A> {
-    pub fn advance_t_cycles(&mut self, mut cycles: i32) {
-        // affected by speed boost
-        self.run_timers(cycles);
-        self.dma.advance_t_cycles(cycles);
-
-        // not affected by speed boost
-        if self.key1.is_enabled() {
-            cycles >>= 1;
-        }
-
-        // TODO: is this order right?
-        self.ppu.run(cycles, &mut self.ints, self.cgb_mode);
-        self.run_dma();
-
-        self.apu.run(cycles);
-        self.cart.run_rtc(cycles);
-
-        self.t_cycles_run += cycles;
-    }
-
-    const fn advance_tima_state(&mut self) {
-        match self.clock.tima_state {
-            TIMAState::Reloading => {
-                self.ints.request_timer();
-                self.clock.tima_state = TIMAState::Reloaded;
-            }
-            TIMAState::Reloaded => {
-                self.clock.tima_state = TIMAState::Running;
-            }
-            TIMAState::Running => (),
+impl Timer {
+    pub fn new() -> Self {
+        Self {
+            counter: 0,
+            cycle_accumulator: 0,
+            enabled: false,
         }
     }
 
-    const fn inc_tima(&mut self) {
-        self.clock.tima = self.clock.tima.wrapping_add(1);
-
-        if self.clock.tima == 0 {
-            self.clock.tima = self.clock.tma;
-            self.clock.tima_state = TIMAState::Reloading;
-        }
+    /// Set timer value using AM0 instruction (TM8 = 0)
+    pub fn set_am0(&mut self, value: u8) {
+        self.counter = value as u16; // TM8 = 0, so only lower 8 bits
+        self.enabled = true;
     }
 
-    // only modify div inside this function
-    // TODO: this could be optimized
-    fn set_system_clk(&mut self, val: u16) {
-        #[must_use]
-        const fn sys_clk_tac_mux(tac: u8) -> u16 {
-            match tac & 3 {
-                0 => 1 << 9,
-                1 => 1 << 3,
-                2 => 1 << 5,
-                _ => 1 << 7,
+    /// Set timer value using AM1 instruction (TM8 = 1) 
+    pub fn set_am1(&mut self, value: u8) {
+        self.counter = (value as u16) | 0x100; // TM8 = 1, so bit 8 is set
+        self.enabled = true;
+    }
+
+    /// Get current timer counter value
+    pub const fn counter(&self) -> u16 {
+        self.counter
+    }
+
+    /// Disable timer (set to 000H when not used)
+    pub fn disable(&mut self) {
+        self.counter = 0;
+        self.cycle_accumulator = 0;
+        self.enabled = false;
+    }
+
+    /// Run timer for given number of CPU cycles
+    /// Returns true if timer overflowed (reached 1FFH) and interrupt should be requested
+    pub fn run_cycles(&mut self, cycles: u32) -> bool {
+        if !self.enabled {
+            return false;
+        }
+
+        self.cycle_accumulator += cycles;
+        let mut interrupt_requested = false;
+
+        // Each timer increment happens every TIMER_CYCLES_PER_INCREMENT CPU cycles
+        while self.cycle_accumulator >= TIMER_CYCLES_PER_INCREMENT {
+            self.cycle_accumulator -= TIMER_CYCLES_PER_INCREMENT;
+            
+            self.counter += 1;
+            
+            // Check for overflow at 1FFH (9-bit counter)
+            if self.counter > 0x1FF {
+                self.counter = 0; // Reset to 0 after overflow
+                interrupt_requested = true;
             }
         }
 
-        let triggers = self.clock.div & !val;
-        let apu_bit = if self.key1.is_enabled() {
-            0x2000
-        } else {
-            0x1000
-        };
-
-        // increase TIMA on falling edge of TAC mux
-        if self.is_tac_enabled() && (triggers & sys_clk_tac_mux(self.clock.tac) != 0) {
-            self.inc_tima();
-        }
-
-        // advance serial master clock
-        if triggers & u16::from(self.serial.div_mask()) != 0 {
-            self.serial.run_master(&mut self.ints);
-        }
-
-        // advance APU on falling edge of APU_DIV bit
-        if triggers & apu_bit != 0 {
-            self.apu.step_div_apu();
-        }
-
-        self.clock.div = val;
+        interrupt_requested
     }
 
-    pub fn run_timers(&mut self, cycles: i32) {
-        for _ in 0..cycles / 4 {
-            self.advance_tima_state();
-            self.set_system_clk(self.clock.div.wrapping_add(4));
+    /// Check if timer is enabled
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+}
+
+/// PC-1500 System implementation with timer support
+pub struct Pc1500System {
+    timer: Timer,
+}
+
+impl Pc1500System {
+    pub fn new() -> Self {
+        Self {
+            timer: Timer::new(),
         }
     }
 
-    #[must_use]
-    pub const fn read_div(&self) -> u8 {
-        ((self.clock.div >> 8) & 0xFF) as u8
+    /// Run system for given number of CPU cycles
+    /// Returns true if timer interrupt should be processed
+    pub fn run_cycles(&mut self, cycles: u32) -> bool {
+        self.timer.run_cycles(cycles)
     }
 
-    pub fn write_div(&mut self) {
-        self.set_system_clk(0);
+    /// Handle AM0 instruction from CPU (Acc to Timer with TM8=0)
+    pub fn cpu_am0_instruction(&mut self, accumulator: u8) {
+        self.timer.set_am0(accumulator);
     }
 
-    pub const fn write_tima(&mut self, val: u8) {
-        self.clock.tima = val;
+    /// Handle AM1 instruction from CPU (Acc to Timer with TM8=1)  
+    pub fn cpu_am1_instruction(&mut self, accumulator: u8) {
+        self.timer.set_am1(accumulator);
     }
 
-    pub const fn write_tma(&mut self, val: u8) {
-        self.clock.tma = val;
+    /// Get timer counter for debugging
+    pub const fn timer_counter(&self) -> u16 {
+        self.timer.counter()
     }
 
-    #[must_use]
-    pub const fn read_tac(&self) -> u8 {
-        0xF8 | self.clock.tac
+    /// Check if timer is enabled
+    pub const fn timer_enabled(&self) -> bool {
+        self.timer.is_enabled()
     }
 
-    pub const fn write_tac(&mut self, val: u8) {
-        self.clock.tac = val;
+    /// Disable timer
+    pub fn disable_timer(&mut self) {
+        self.timer.disable();
     }
+}
 
-    #[must_use]
-    const fn is_tac_enabled(&self) -> bool {
-        self.clock.tac & 4 != 0
+impl Default for Pc1500System {
+    fn default() -> Self {
+        Self::new()
     }
 }
