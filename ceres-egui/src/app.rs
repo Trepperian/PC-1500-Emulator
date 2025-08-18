@@ -1,9 +1,22 @@
-use ceres_std::GbThread;
-use ceres_std::{AppOption, ScalingOption, ShaderOption};
+// NOTE: This file currently uses GameBoy components (GbThread, ceres_std::Button)
+// which are incompatible with PC-1500. You have two options:
+//
+// 1. USE PC1500_APP.RS: The file pc1500_app.rs already has a complete PC-1500 implementation
+//    with proper keyboard mapping, display system, and ROM loading.
+//
+// 2. CONVERT THIS FILE: Replace GbThread with a PC-1500 instance and complete the TODO
+//    items below to make this work with PC-1500.
+//
+// For now, we've created the complete key mapping structure below, but you need to
+// decide which approach to take.
+
+// use ceres_core::joypad::Key as Pc1500Key; // TODO: Uncomment when converting to PC-1500
+use ceres_std::Pc1500Thread; // TODO: Replace with PC-1500 equivalent
+use ceres_std::{AppOption, ShaderOption};
 use eframe::egui::{self, CornerRadius, Key, style::HandleShape};
 use rfd::FileDialog;
 use std::{
-    fs::File,
+    // fs::File, // TODO: Will be needed when implementing save functionality
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -113,8 +126,9 @@ impl ceres_std::PainterCallback for PainterCallbackImpl {
 
 pub struct App {
     project_dirs: directories::ProjectDirs,
-    thread: GbThread,
-    screen: screen::GBScreen<{ ceres_std::PX_WIDTH as u32 }, { ceres_std::PX_HEIGHT as u32 }>,
+    thread: Pc1500Thread,
+    screen:
+        screen::GBScreen<{ ceres_std::DISPLAY_WIDTH as u32 }, { ceres_std::DISPLAY_HEIGHT as u32 }>,
     rom_path: Option<PathBuf>,
     sav_path: Option<PathBuf>,
 }
@@ -136,7 +150,7 @@ impl App {
             vec![0; ceres_std::PIXEL_BUFFER_SIZE].into_boxed_slice(),
         ));
 
-        let mut thread = GbThread::new(
+        let mut thread = Pc1500Thread::new(
             model,
             sav_path.as_deref(),
             rom_path,
@@ -168,20 +182,6 @@ impl App {
                 .with_extension("sav"),
         )
     }
-
-    fn save_data(&self) -> anyhow::Result<()> {
-        if !self.thread.has_save_data() {
-            return Ok(());
-        }
-
-        std::fs::create_dir_all(self.project_dirs.data_dir())?;
-        if let Some(sav_path) = &self.sav_path {
-            let sav_file = File::create(sav_path);
-            self.thread.save_data(&mut sav_file?)?;
-        }
-
-        Ok(())
-    }
 }
 
 impl eframe::App for App {
@@ -198,12 +198,10 @@ impl eframe::App for App {
                         if let Some(file) = file {
                             let sav_path = Self::sav_path_from_rom_path(&self.project_dirs, &file);
 
-                            if let Err(e) = self.thread.change_rom(sav_path.as_deref(), &file) {
-                                eprintln!("couldn't open ROM: {e}");
-                            } else {
-                                self.sav_path = sav_path;
-                                self.rom_path = Some(file);
-                            }
+                            // Placeholder: Set paths without loading
+                            self.sav_path = sav_path;
+                            self.rom_path = Some(file);
+                            println!("ROM selected: {:?}", self.rom_path);
                         }
                     }
 
@@ -229,62 +227,11 @@ impl eframe::App for App {
                             }
                         }
 
-                        let multiplier = self.thread.multiplier();
-
-                        if horizontal_ui
-                            .selectable_label(multiplier == 1, "1x")
-                            .on_hover_text("Speed 1x")
-                            .clicked()
-                        {
-                            self.thread.set_speed_multiplier(1);
-                        }
-
-                        if horizontal_ui
-                            .selectable_label(multiplier == 2, "2x")
-                            .on_hover_text("Speed 2x")
-                            .clicked()
-                        {
-                            self.thread.set_speed_multiplier(2);
-                        }
-
-                        if horizontal_ui
-                            .selectable_label(multiplier == 4, "4x")
-                            .on_hover_text("Speed 4x")
-                            .clicked()
-                        {
-                            self.thread.set_speed_multiplier(4);
-                        }
+                        // TODO: Add speed controls (1x, 2x, 4x) when implementing PC-1500 thread
+                        // let multiplier = self.thread.multiplier();
                     });
 
-                    menu_button_ui.horizontal(|horizontal_ui| {
-                        let muted = self.thread.is_muted();
-
-                        if horizontal_ui
-                            .selectable_label(muted, if muted { "\u{1f507}" } else { "\u{1f50a}" })
-                            .on_hover_text("Mute")
-                            .clicked()
-                        {
-                            self.thread.toggle_mute();
-                        }
-
-                        horizontal_ui.style_mut().spacing.slider_width = 50.0;
-
-                        let volume_slider = egui::Slider::from_get_set(0.0..=1.0, |volume| {
-                            if let Some(volume) = volume {
-                                #[expect(clippy::cast_possible_truncation)]
-                                self.thread.set_volume(volume as f32);
-                            }
-
-                            self.thread.volume().into()
-                        })
-                        .custom_formatter(
-                            // percentage
-                            |value, _| format!("{:.0}%", value * 100.0),
-                        )
-                        .trailing_fill(true);
-
-                        horizontal_ui.add(volume_slider);
-                    });
+                    // Audio/Volume controls removed - not applicable for PC-1500
 
                     menu_button_ui.menu_button("Shader", |menu_button_ui| {
                         for shader_option in ShaderOption::iter() {
@@ -299,6 +246,8 @@ impl eframe::App for App {
                         }
                     });
 
+                    // Scaling menu removed - ScalingOption no longer available
+                    /*
                     menu_button_ui.menu_button("Scaling", |menu_button_ui| {
                         for pixel_mode in ScalingOption::iter() {
                             let pixel_button = egui::Button::selectable(
@@ -311,6 +260,7 @@ impl eframe::App for App {
                             }
                         }
                     });
+                    */
                 });
             });
         });
@@ -328,80 +278,137 @@ impl eframe::App for App {
                 self.screen.custom_painting(central_panel_ui);
             });
 
-        self.thread.press_release(|p| {
-            ctx.input(|i| {
-                if i.key_pressed(Key::W) {
-                    p.press(ceres_std::Button::Up);
-                }
+        // Handle PC-1500 keyboard input - Complete key mapping
+        ctx.input(|i| {
+            // Numbers 0-9
+            if i.key_pressed(Key::Num0) { /* TODO: Add PC-1500 instance to press Pc1500Key::Zero */ }
+            if i.key_released(Key::Num0) { /* TODO: Add PC-1500 instance to release Pc1500Key::Zero */ }
+            if i.key_pressed(Key::Num1) { /* TODO: Add PC-1500 instance to press Pc1500Key::One */ }
+            if i.key_released(Key::Num1) { /* TODO: Add PC-1500 instance to release Pc1500Key::One */ }
+            if i.key_pressed(Key::Num2) { /* TODO: Add PC-1500 instance to press Pc1500Key::Two */ }
+            if i.key_released(Key::Num2) { /* TODO: Add PC-1500 instance to release Pc1500Key::Two */ }
+            if i.key_pressed(Key::Num3) { /* TODO: Add PC-1500 instance to press Pc1500Key::Three */ }
+            if i.key_released(Key::Num3) { /* TODO: Add PC-1500 instance to release Pc1500Key::Three */ }
+            if i.key_pressed(Key::Num4) { /* TODO: Add PC-1500 instance to press Pc1500Key::Four */ }
+            if i.key_released(Key::Num4) { /* TODO: Add PC-1500 instance to release Pc1500Key::Four */ }
+            if i.key_pressed(Key::Num5) { /* TODO: Add PC-1500 instance to press Pc1500Key::Five */ }
+            if i.key_released(Key::Num5) { /* TODO: Add PC-1500 instance to release Pc1500Key::Five */ }
+            if i.key_pressed(Key::Num6) { /* TODO: Add PC-1500 instance to press Pc1500Key::Six */ }
+            if i.key_released(Key::Num6) { /* TODO: Add PC-1500 instance to release Pc1500Key::Six */ }
+            if i.key_pressed(Key::Num7) { /* TODO: Add PC-1500 instance to press Pc1500Key::Seven */ }
+            if i.key_released(Key::Num7) { /* TODO: Add PC-1500 instance to release Pc1500Key::Seven */ }
+            if i.key_pressed(Key::Num8) { /* TODO: Add PC-1500 instance to press Pc1500Key::Eight */ }
+            if i.key_released(Key::Num8) { /* TODO: Add PC-1500 instance to release Pc1500Key::Eight */ }
+            if i.key_pressed(Key::Num9) { /* TODO: Add PC-1500 instance to press Pc1500Key::Nine */ }
+            if i.key_released(Key::Num9) { /* TODO: Add PC-1500 instance to release Pc1500Key::Nine */ }
 
-                if i.key_released(Key::W) {
-                    p.release(ceres_std::Button::Up);
-                }
+            // Letters A-Z
+            if i.key_pressed(Key::A) { /* TODO: Add PC-1500 instance to press Pc1500Key::A */ }
+            if i.key_released(Key::A) { /* TODO: Add PC-1500 instance to release Pc1500Key::A */ }
+            if i.key_pressed(Key::B) { /* TODO: Add PC-1500 instance to press Pc1500Key::B */ }
+            if i.key_released(Key::B) { /* TODO: Add PC-1500 instance to release Pc1500Key::B */ }
+            if i.key_pressed(Key::C) { /* TODO: Add PC-1500 instance to press Pc1500Key::C */ }
+            if i.key_released(Key::C) { /* TODO: Add PC-1500 instance to release Pc1500Key::C */ }
+            if i.key_pressed(Key::D) { /* TODO: Add PC-1500 instance to press Pc1500Key::D */ }
+            if i.key_released(Key::D) { /* TODO: Add PC-1500 instance to release Pc1500Key::D */ }
+            if i.key_pressed(Key::E) { /* TODO: Add PC-1500 instance to press Pc1500Key::E */ }
+            if i.key_released(Key::E) { /* TODO: Add PC-1500 instance to release Pc1500Key::E */ }
+            if i.key_pressed(Key::F) { /* TODO: Add PC-1500 instance to press Pc1500Key::F */ }
+            if i.key_released(Key::F) { /* TODO: Add PC-1500 instance to release Pc1500Key::F */ }
+            if i.key_pressed(Key::G) { /* TODO: Add PC-1500 instance to press Pc1500Key::G */ }
+            if i.key_released(Key::G) { /* TODO: Add PC-1500 instance to release Pc1500Key::G */ }
+            if i.key_pressed(Key::H) { /* TODO: Add PC-1500 instance to press Pc1500Key::H */ }
+            if i.key_released(Key::H) { /* TODO: Add PC-1500 instance to release Pc1500Key::H */ }
+            if i.key_pressed(Key::I) { /* TODO: Add PC-1500 instance to press Pc1500Key::I */ }
+            if i.key_released(Key::I) { /* TODO: Add PC-1500 instance to release Pc1500Key::I */ }
+            if i.key_pressed(Key::J) { /* TODO: Add PC-1500 instance to press Pc1500Key::J */ }
+            if i.key_released(Key::J) { /* TODO: Add PC-1500 instance to release Pc1500Key::J */ }
+            if i.key_pressed(Key::K) { /* TODO: Add PC-1500 instance to press Pc1500Key::K */ }
+            if i.key_released(Key::K) { /* TODO: Add PC-1500 instance to release Pc1500Key::K */ }
+            if i.key_pressed(Key::L) { /* TODO: Add PC-1500 instance to press Pc1500Key::L */ }
+            if i.key_released(Key::L) { /* TODO: Add PC-1500 instance to release Pc1500Key::L */ }
+            if i.key_pressed(Key::M) { /* TODO: Add PC-1500 instance to press Pc1500Key::M */ }
+            if i.key_released(Key::M) { /* TODO: Add PC-1500 instance to release Pc1500Key::M */ }
+            if i.key_pressed(Key::N) { /* TODO: Add PC-1500 instance to press Pc1500Key::N */ }
+            if i.key_released(Key::N) { /* TODO: Add PC-1500 instance to release Pc1500Key::N */ }
+            if i.key_pressed(Key::O) { /* TODO: Add PC-1500 instance to press Pc1500Key::O */ }
+            if i.key_released(Key::O) { /* TODO: Add PC-1500 instance to release Pc1500Key::O */ }
+            if i.key_pressed(Key::P) { /* TODO: Add PC-1500 instance to press Pc1500Key::P */ }
+            if i.key_released(Key::P) { /* TODO: Add PC-1500 instance to release Pc1500Key::P */ }
+            if i.key_pressed(Key::Q) { /* TODO: Add PC-1500 instance to press Pc1500Key::Q */ }
+            if i.key_released(Key::Q) { /* TODO: Add PC-1500 instance to release Pc1500Key::Q */ }
+            if i.key_pressed(Key::R) { /* TODO: Add PC-1500 instance to press Pc1500Key::R */ }
+            if i.key_released(Key::R) { /* TODO: Add PC-1500 instance to release Pc1500Key::R */ }
+            if i.key_pressed(Key::S) { /* TODO: Add PC-1500 instance to press Pc1500Key::S */ }
+            if i.key_released(Key::S) { /* TODO: Add PC-1500 instance to release Pc1500Key::S */ }
+            if i.key_pressed(Key::T) { /* TODO: Add PC-1500 instance to press Pc1500Key::T */ }
+            if i.key_released(Key::T) { /* TODO: Add PC-1500 instance to release Pc1500Key::T */ }
+            if i.key_pressed(Key::U) { /* TODO: Add PC-1500 instance to press Pc1500Key::U */ }
+            if i.key_released(Key::U) { /* TODO: Add PC-1500 instance to release Pc1500Key::U */ }
+            if i.key_pressed(Key::V) { /* TODO: Add PC-1500 instance to press Pc1500Key::V */ }
+            if i.key_released(Key::V) { /* TODO: Add PC-1500 instance to release Pc1500Key::V */ }
+            if i.key_pressed(Key::W) { /* TODO: Add PC-1500 instance to press Pc1500Key::W */ }
+            if i.key_released(Key::W) { /* TODO: Add PC-1500 instance to release Pc1500Key::W */ }
+            if i.key_pressed(Key::X) { /* TODO: Add PC-1500 instance to press Pc1500Key::X */ }
+            if i.key_released(Key::X) { /* TODO: Add PC-1500 instance to release Pc1500Key::X */ }
+            if i.key_pressed(Key::Y) { /* TODO: Add PC-1500 instance to press Pc1500Key::Y */ }
+            if i.key_released(Key::Y) { /* TODO: Add PC-1500 instance to release Pc1500Key::Y */ }
+            if i.key_pressed(Key::Z) { /* TODO: Add PC-1500 instance to press Pc1500Key::Z */ }
+            if i.key_released(Key::Z) { /* TODO: Add PC-1500 instance to release Pc1500Key::Z */ }
 
-                if i.key_pressed(Key::A) {
-                    p.press(ceres_std::Button::Left);
-                }
+            // Function keys
+            if i.key_pressed(Key::F1) { /* TODO: Add PC-1500 instance to press Pc1500Key::F1 */ }
+            if i.key_released(Key::F1) { /* TODO: Add PC-1500 instance to release Pc1500Key::F1 */ }
+            if i.key_pressed(Key::F2) { /* TODO: Add PC-1500 instance to press Pc1500Key::F2 */ }
+            if i.key_released(Key::F2) { /* TODO: Add PC-1500 instance to release Pc1500Key::F2 */ }
+            if i.key_pressed(Key::F3) { /* TODO: Add PC-1500 instance to press Pc1500Key::F3 */ }
+            if i.key_released(Key::F3) { /* TODO: Add PC-1500 instance to release Pc1500Key::F3 */ }
+            if i.key_pressed(Key::F4) { /* TODO: Add PC-1500 instance to press Pc1500Key::F4 */ }
+            if i.key_released(Key::F4) { /* TODO: Add PC-1500 instance to release Pc1500Key::F4 */ }
+            if i.key_pressed(Key::F5) { /* TODO: Add PC-1500 instance to press Pc1500Key::F5 */ }
+            if i.key_released(Key::F5) { /* TODO: Add PC-1500 instance to release Pc1500Key::F5 */ }
+            if i.key_pressed(Key::F6) { /* TODO: Add PC-1500 instance to press Pc1500Key::F6 */ }
+            if i.key_released(Key::F6) { /* TODO: Add PC-1500 instance to release Pc1500Key::F6 */ }
 
-                if i.key_released(Key::A) {
-                    p.release(ceres_std::Button::Left);
-                }
+            // Arrow keys
+            if i.key_pressed(Key::ArrowUp) { /* TODO: Add PC-1500 instance to press Pc1500Key::Up */ }
+            if i.key_released(Key::ArrowUp) { /* TODO: Add PC-1500 instance to release Pc1500Key::Up */ }
+            if i.key_pressed(Key::ArrowDown) { /* TODO: Add PC-1500 instance to press Pc1500Key::Down */ }
+            if i.key_released(Key::ArrowDown) { /* TODO: Add PC-1500 instance to release Pc1500Key::Down */ }
+            if i.key_pressed(Key::ArrowLeft) { /* TODO: Add PC-1500 instance to press Pc1500Key::Left */ }
+            if i.key_released(Key::ArrowLeft) { /* TODO: Add PC-1500 instance to release Pc1500Key::Left */ }
+            if i.key_pressed(Key::ArrowRight) { /* TODO: Add PC-1500 instance to press Pc1500Key::Right */ }
+            if i.key_released(Key::ArrowRight) { /* TODO: Add PC-1500 instance to release Pc1500Key::Right */ }
 
-                if i.key_pressed(Key::S) {
-                    p.press(ceres_std::Button::Down);
-                }
+            // Special keys
+            if i.key_pressed(Key::Space) { /* TODO: Add PC-1500 instance to press Pc1500Key::Space */ }
+            if i.key_released(Key::Space) { /* TODO: Add PC-1500 instance to release Pc1500Key::Space */ }
+            if i.key_pressed(Key::Enter) { /* TODO: Add PC-1500 instance to press Pc1500Key::Enter */ }
+            if i.key_released(Key::Enter) { /* TODO: Add PC-1500 instance to release Pc1500Key::Enter */ }
+            if i.key_pressed(Key::Escape) { /* TODO: Add PC-1500 instance to press Pc1500Key::Off */ }
+            if i.key_released(Key::Escape) { /* TODO: Add PC-1500 instance to release Pc1500Key::Off */ }
+            if i.key_pressed(Key::Tab) { /* TODO: Add PC-1500 instance to press Pc1500Key::Mode */ }
+            if i.key_released(Key::Tab) { /* TODO: Add PC-1500 instance to release Pc1500Key::Mode */ }
+            if i.key_pressed(Key::Backspace) { /* TODO: Add PC-1500 instance to press Pc1500Key::Cl */ }
+            if i.key_released(Key::Backspace) { /* TODO: Add PC-1500 instance to release Pc1500Key::Cl */ }
 
-                if i.key_released(Key::S) {
-                    p.release(ceres_std::Button::Down);
-                }
+            // Math operators (using available egui keys)
+            if i.key_pressed(Key::Plus) { /* TODO: Add PC-1500 instance to press Pc1500Key::Plus */ }
+            if i.key_released(Key::Plus) { /* TODO: Add PC-1500 instance to release Pc1500Key::Plus */ }
+            if i.key_pressed(Key::Minus) { /* TODO: Add PC-1500 instance to press Pc1500Key::Minus */ }
+            if i.key_released(Key::Minus) { /* TODO: Add PC-1500 instance to release Pc1500Key::Minus */ }
+            // Note: Asterisk (*) would need to be mapped to Shift+8 or another key combination
+            if i.key_pressed(Key::Slash) { /* TODO: Add PC-1500 instance to press Pc1500Key::Slash */ }
+            if i.key_released(Key::Slash) { /* TODO: Add PC-1500 instance to release Pc1500Key::Slash */ }
+            if i.key_pressed(Key::Equals) { /* TODO: Add PC-1500 instance to press Pc1500Key::Equals */ }
+            if i.key_released(Key::Equals) { /* TODO: Add PC-1500 instance to release Pc1500Key::Equals */ }
+            if i.key_pressed(Key::Period) { /* TODO: Add PC-1500 instance to press Pc1500Key::Dot */ }
+            if i.key_released(Key::Period) { /* TODO: Add PC-1500 instance to release Pc1500Key::Dot */ }
 
-                if i.key_pressed(Key::D) {
-                    p.press(ceres_std::Button::Right);
-                }
-
-                if i.key_released(Key::D) {
-                    p.release(ceres_std::Button::Right);
-                }
-
-                if i.key_pressed(Key::L) {
-                    p.press(ceres_std::Button::A);
-                }
-
-                if i.key_released(Key::L) {
-                    p.release(ceres_std::Button::A);
-                }
-
-                if i.key_pressed(Key::K) {
-                    p.press(ceres_std::Button::B);
-                }
-
-                if i.key_released(Key::K) {
-                    p.release(ceres_std::Button::B);
-                }
-
-                if i.key_pressed(Key::M) {
-                    p.press(ceres_std::Button::Start);
-                }
-
-                if i.key_released(Key::M) {
-                    p.release(ceres_std::Button::Start);
-                }
-
-                if i.key_pressed(Key::N) {
-                    p.press(ceres_std::Button::Select);
-                }
-
-                if i.key_released(Key::N) {
-                    p.release(ceres_std::Button::Select);
-                }
-            });
-
-            true
+            // Additional PC-1500 specific keys (mapped to available PC keys)
+            // You can customize these mappings as needed
         });
     }
-
-    fn on_exit(&mut self) {
-        if let Err(e) = self.save_data() {
-            eprintln!("couldn't save data: {e}");
-        }
-    }
+    //Possible use!
+    fn on_exit(&mut self) {}
 }

@@ -4,7 +4,7 @@
 /// and the PC-1500 virtual keyboard matrix.
 
 use eframe::egui::Key;
-use ceres_core::pc1500::joypad::Key as Pc1500Key;
+use ceres_core::joypad::Key as Pc1500Key;
 use std::collections::HashSet;
 
 /// Maps physical PC keyboard keys to PC-1500 keys

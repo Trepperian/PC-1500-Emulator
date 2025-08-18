@@ -15,12 +15,12 @@ fn main() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([
-                f32::from(ceres_std::PX_WIDTH),
-                f32::from(ceres_std::PX_HEIGHT) + 22.0,
+                ceres_std::DISPLAY_WIDTH as f32,
+                ceres_std::DISPLAY_HEIGHT as f32 + 22.0,
             ])
             .with_min_inner_size([
-                f32::from(ceres_std::PX_WIDTH),
-                f32::from(ceres_std::PX_HEIGHT) + 22.0,
+                ceres_std::DISPLAY_WIDTH as f32,
+                ceres_std::DISPLAY_HEIGHT as f32 + 22.0,
             ]),
         renderer: eframe::Renderer::Wgpu,
         vsync: true,

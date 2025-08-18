@@ -1,16 +1,14 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use ceres_std::ScalingOption;
 use ceres_std::ShaderOption;
-use ceres_std::wgpu_renderer::PipelineWrapper;
+use ceres_std::wgpu_renderer::{PipelineWrapper, ScalingOption};
 use eframe::egui;
 use eframe::wgpu;
 
 pub struct GBScreen<const PX_WIDTH: u32, const PX_HEIGHT: u32> {
     buffer: Arc<Mutex<Box<[u8]>>>,
     shader_option: ShaderOption,
-    pixel_mode: ScalingOption,
     size: (f32, f32),
 }
 
@@ -42,7 +40,6 @@ impl<const PX_WIDTH: u32, const PX_HEIGHT: u32> GBScreen<PX_WIDTH, PX_HEIGHT> {
             buffer: gb,
             shader_option,
             size: (0.0, 0.0),
-            pixel_mode: ScalingOption::default(),
         }
     }
 
@@ -56,7 +53,6 @@ impl<const PX_WIDTH: u32, const PX_HEIGHT: u32> GBScreen<PX_WIDTH, PX_HEIGHT> {
                 buffer: Arc::clone(&self.buffer),
                 shader_option: self.shader_option,
                 size: (response.rect.width(), response.rect.height()),
-                pixel_mode: self.pixel_mode,
             },
         ));
     }
@@ -67,14 +63,6 @@ impl<const PX_WIDTH: u32, const PX_HEIGHT: u32> GBScreen<PX_WIDTH, PX_HEIGHT> {
 
     pub const fn shader_option_mut(&mut self) -> &mut ShaderOption {
         &mut self.shader_option
-    }
-
-    pub const fn pixel_mode(&self) -> ScalingOption {
-        self.pixel_mode
-    }
-
-    pub const fn mut_pixel_mode(&mut self) -> &mut ScalingOption {
-        &mut self.pixel_mode
     }
 }
 
@@ -110,7 +98,7 @@ impl<const PX_WIDTH: u32, const PX_HEIGHT: u32> eframe::egui_wgpu::CallbackTrait
 
             #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             pipeline.resize(
-                self.pixel_mode.into(),
+                ScalingOption::PixelPerfect,
                 queue,
                 self.size.0 as u32,
                 self.size.1 as u32,

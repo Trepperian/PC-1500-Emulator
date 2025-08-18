@@ -11,15 +11,6 @@ pub enum ScalingOption {
     Stretch,
 }
 
-impl From<crate::ScalingOption> for ScalingOption {
-    fn from(scaling_option: crate::ScalingOption) -> Self {
-        match scaling_option {
-            crate::ScalingOption::PixelPerfect => Self::PixelPerfect,
-            crate::ScalingOption::Stretch => Self::Stretch,
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ShaderOption {
     Nearest = 0,
@@ -41,7 +32,7 @@ impl From<crate::ShaderOption> for ShaderOption {
     }
 }
 
-pub struct PipelineWrapper<const PX_WIDTH: u32, const PX_HEIGHT: u32> {
+pub struct PipelineWrapper<const DISPLAY_WIDTH: u32, const DISPLAY_HEIGHT: u32> {
     render_pipeline: wgpu::RenderPipeline,
 
     // Shader config binds
@@ -59,7 +50,7 @@ pub struct PipelineWrapper<const PX_WIDTH: u32, const PX_HEIGHT: u32> {
     texture_bind_group_layout: wgpu::BindGroupLayout,
 }
 
-impl<const PX_WIDTH: u32, const PX_HEIGHT: u32> PipelineWrapper<PX_WIDTH, PX_HEIGHT> {
+impl<const DISPLAY_WIDTH: u32, const DISPLAY_HEIGHT: u32> PipelineWrapper<DISPLAY_WIDTH, DISPLAY_HEIGHT> {
     #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn new(
@@ -67,8 +58,8 @@ impl<const PX_WIDTH: u32, const PX_HEIGHT: u32> PipelineWrapper<PX_WIDTH, PX_HEI
         target_format: wgpu::TextureFormat,
         shader_option: ShaderOption,
     ) -> Self {
-        let frame_texture = Texture::new(device, PX_WIDTH, PX_HEIGHT, Some("current_frame"));
-        let prev_frame_texture = Texture::new(device, PX_WIDTH, PX_HEIGHT, Some("prev_frame"));
+        let frame_texture = Texture::new(device, DISPLAY_WIDTH, DISPLAY_HEIGHT, Some("current_frame"));
+        let prev_frame_texture = Texture::new(device, DISPLAY_WIDTH, DISPLAY_HEIGHT, Some("prev_frame"));
 
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -281,15 +272,15 @@ impl<const PX_WIDTH: u32, const PX_HEIGHT: u32> PipelineWrapper<PX_WIDTH, PX_HEI
         let (x, y) = {
             #[allow(clippy::cast_precision_loss)]
             let mul = if matches!(scaling_option, ScalingOption::PixelPerfect) {
-                (width / PX_WIDTH).min(height / PX_HEIGHT) as f32
+                (width / DISPLAY_WIDTH).min(height / DISPLAY_HEIGHT) as f32
             } else {
-                (width as f32 / PX_WIDTH as f32).min(height as f32 / PX_HEIGHT as f32)
+                (width as f32 / DISPLAY_WIDTH as f32).min(height as f32 / DISPLAY_HEIGHT as f32)
             };
 
             #[allow(clippy::cast_precision_loss)]
-            let x = (PX_WIDTH as f32 * mul) / width as f32;
+            let x = (DISPLAY_WIDTH as f32 * mul) / width as f32;
             #[allow(clippy::cast_precision_loss)]
-            let y = (PX_HEIGHT as f32 * mul) / height as f32;
+            let y = (DISPLAY_HEIGHT as f32 * mul) / height as f32;
             (x, y)
         };
 

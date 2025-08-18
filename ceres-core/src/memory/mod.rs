@@ -43,7 +43,7 @@ pub mod map {
 
 /// Main memory bus for PC-1500
 pub struct MemoryBus {
-    rom: &'static[u8],
+    rom: &'static [u8],
     ram: [u8; map::RAM_SIZE],
     display_controller: DisplayController,
     keyboard: Keyboard,
@@ -68,14 +68,6 @@ impl MemoryBus {
         } else {
             (self.rom.len(), "PC-1500 ROM dump")
         }
-    }
-
-    /// Legacy method - ROM is now included at compile time
-    /// This method is kept for compatibility but does nothing
-    pub fn load_rom(&mut self, _data: &[u8]) -> Result<(), &'static str> {
-        // ROM is now embedded at compile time, no need to load
-        println!("ROM is embedded at compile time. ROM size: {} bytes", self.rom.len());
-        Ok(())
     }
 
     /// Read a byte from the address space
@@ -159,7 +151,7 @@ impl MemoryBus {
     pub fn read_keyboard_input(&self) -> u8 {
         self.keyboard.read_input_pins_in0_in7()
     }
-    
+
     /// Write to output port for ATP instruction
     /// This method is called by the CPU's ATP instruction to send
     /// accumulator contents to the output port

@@ -13,7 +13,9 @@ pub mod timing;
 pub use cpu::Lh5801Cpu;
 use display::DisplayController;
 use interrupts::InterruptController;
+use joypad::Keyboard;
 use keyboard::KeyboardController;
+pub use joypad::Key;
 use memory::MemoryBus;
 pub use timing::FRAME_DURATION;
 
@@ -41,6 +43,7 @@ pub struct Pc1500 {
     cpu: Lh5801Cpu,
     memory: MemoryBus,
     keyboard: KeyboardController,
+    joypad: Keyboard,
     interrupt_controller: InterruptController,
     timer: timing::Timer,
 
@@ -57,16 +60,12 @@ impl Pc1500 {
             cpu: Lh5801Cpu::new(),
             memory: MemoryBus::new(),
             keyboard: KeyboardController::new(),
+            joypad: Keyboard::new(),
             interrupt_controller: InterruptController::new(),
             timer: timing::Timer::new(),
             cycles_run: 0,
             target_cycles_per_frame: timing::CYCLES_PER_FRAME as u64,
         }
-    }
-
-    /// Load BIOS/ROM data into the system
-    pub fn load_bios(&mut self, bios_data: &[u8]) -> Result<(), &'static str> {
-        self.memory.load_rom(bios_data)
     }
 
     /// Soft reset the system (following GameBoy pattern)
@@ -87,7 +86,7 @@ impl Pc1500 {
     pub fn run_cpu(&mut self) {
         // Store previous timer register value for comparison
         let prev_timer_reg = self.cpu.get_timer_register();
-        
+
         // Execute one CPU instruction
         let cycles = self.cpu.step(&mut self.memory);
         self.cycles_run += cycles as u64;
@@ -98,7 +97,7 @@ impl Pc1500 {
             // AM0/AM1 instruction was executed, synchronize system timer
             let accumulator_value = (new_timer_reg & 0xFF) as u8;
             let tm8_bit = (new_timer_reg & 0x100) != 0;
-            
+
             if tm8_bit {
                 self.timer.set_am1(accumulator_value);
             } else {
@@ -108,7 +107,7 @@ impl Pc1500 {
 
         // Run timer for the cycles executed
         let timer_interrupt = self.timer.run_cycles(cycles as u32);
-        
+
         // Request timer interrupt if timer overflowed
         if timer_interrupt {
             self.interrupt_controller.request_timer_interrupt();
@@ -161,6 +160,26 @@ impl Pc1500 {
     /// Release a key (following GameBoy pattern - for compatibility)
     pub fn release_key(&mut self, scancode: u32) {
         self.handle_key_input(scancode, false);
+    }
+
+    /// Press a PC-1500 key directly using Key enum
+    pub fn press(&mut self, key: Key) {
+        self.joypad.press(key, &mut self.interrupt_controller);
+    }
+
+    /// Release a PC-1500 key directly using Key enum
+    pub fn release(&mut self, key: Key) {
+        self.joypad.release(key);
+    }
+
+    /// Check if a specific PC-1500 key is currently pressed
+    pub fn is_key_pressed(&self, key: Key) -> bool {
+        self.joypad.is_pressed(key)
+    }
+
+    /// Get the raw key code of the first pressed key (for debugging)
+    pub fn get_pressed_key_code(&self) -> u8 {
+        self.joypad.get_pressed_key_code()
     }
 
     /// Get model information (following GameBoy pattern)
@@ -328,11 +347,11 @@ impl Pc1500 {
     /// ROM MODE: Load real PC-1500 ROM and initialize for authentic execution
     pub fn load_rom(&mut self, rom_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         println!("🔄 Loading PC-1500 ROM: {}", rom_path);
-        
+
         // Read ROM file
         let rom_data = std::fs::read(rom_path)?;
         println!("✅ ROM file loaded: {} bytes", rom_data.len());
-        
+
         // Validate ROM size (PC-1500 ROMs are typically 8KB, 16KB, or 32KB)
         match rom_data.len() {
             8192 => println!("📦 ROM Type: 8KB (PC-1500 basic)"),
@@ -340,10 +359,10 @@ impl Pc1500 {
             32768 => println!("📦 ROM Type: 32KB (PC-1500A full)"),
             _ => println!("⚠️  ROM Size: {} bytes (unusual size)", rom_data.len()),
         }
-        
+
         // Reset system but DO NOT run init_test_mode
         self.soft_reset();
-        
+
         // Load ROM data into memory starting at 0x0000
         for (i, &byte) in rom_data.iter().enumerate() {
             let address = i as u16;
@@ -352,28 +371,30 @@ impl Pc1500 {
                 self.memory.write_byte(address, byte);
             }
         }
-        
+
         // Clear display memory to ensure clean state
         // First section (0x7600-0x764F)
         for i in 0..80 {
             self.memory.write_byte(0x7600 + i, 0x00);
         }
-        // Second section (0x7700-0x774F)  
+        // Second section (0x7700-0x774F)
         for i in 0..80 {
             self.memory.write_byte(0x7700 + i, 0x00);
         }
-        
+
         // Set CPU to ROM entry point (PC-1500 ROMs typically start at 0x0000)
         self.cpu.set_pc(0x0000);
-        
+
         println!("✅ ROM MODE Initialized:");
-        println!("   - ROM loaded into memory (0x0000-0x{:04X})", 
-                 std::cmp::min(rom_data.len() - 1, 0x7FFF));
+        println!(
+            "   - ROM loaded into memory (0x0000-0x{:04X})",
+            std::cmp::min(rom_data.len() - 1, 0x7FFF)
+        );
         println!("   - Display memory cleared (0x7600-0x764F, 0x7700-0x774F)");
         println!("   - CPU PC set to 0x0000 (ROM entry point)");
         println!("   - System ready for authentic PC-1500 execution");
         println!("🚀 PC-1500 now running REAL ROM!");
-        
+
         Ok(())
     }
 
@@ -386,7 +407,7 @@ impl Pc1500 {
             self.memory.read_byte(0x0001),
             self.memory.read_byte(0x0002),
         ];
-        
+
         // Our test mode starts with 0x05, 0x55 (LDA #0x55)
         // Real ROMs will have different patterns
         !(first_bytes[0] == 0x05 && first_bytes[1] == 0x55)
@@ -472,53 +493,13 @@ impl Pc1500 {
 /// CPU state information structure
 #[derive(Debug, Clone)]
 pub struct CpuState {
-    pub pc: u16,    // Program counter
-    pub a: u8,      // Accumulator
-    pub b: u8,      // B register
-    pub x: u16,     // X index register  
-    pub y: u16,     // Y index register
-    pub u: u16,     // U pointer register
-    pub s: u16,     // Stack pointer
-    pub flags: u8,  // Processor flags
+    pub pc: u16,   // Program counter
+    pub a: u8,     // Accumulator
+    pub b: u8,     // B register
+    pub x: u16,    // X index register
+    pub y: u16,    // Y index register
+    pub u: u16,    // U pointer register
+    pub s: u16,    // Stack pointer
+    pub flags: u8, // Processor flags
 }
 
-/// Builder for PC-1500 system
-pub struct Pc1500Builder {
-    model: Model,
-    bios_data: Option<Vec<u8>>,
-}
-
-impl Pc1500Builder {
-    pub fn new() -> Self {
-        Self {
-            model: Model::default(),
-            bios_data: None,
-        }
-    }
-
-    pub fn model(mut self, model: Model) -> Self {
-        self.model = model;
-        self
-    }
-
-    pub fn bios(mut self, bios_data: Vec<u8>) -> Self {
-        self.bios_data = Some(bios_data);
-        self
-    }
-
-    pub fn build(self) -> Result<Pc1500, &'static str> {
-        let mut system = Pc1500::new(self.model);
-
-        if let Some(bios_data) = self.bios_data {
-            system.load_bios(&bios_data)?;
-        }
-
-        Ok(system)
-    }
-}
-
-impl Default for Pc1500Builder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
