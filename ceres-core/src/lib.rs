@@ -1,21 +1,21 @@
-/// PC-1500 Sharp Pocket Computer Emulation
-///
-/// This module contains the complete PC-1500 system implementation,
-/// following the same modular structure as the GameBoy emulation.
-pub mod cpu;
 pub mod display;
 pub mod interrupts;
 pub mod joypad;
 pub mod keyboard;
+/// PC-1500 Sharp Pocket Computer Emulation
+///
+/// This module contains the complete PC-1500 system implementation,
+/// following the same modular structure as the GameBoy emulation.
+pub mod lh5801;
 pub mod memory;
 pub mod timing;
 
-pub use cpu::Lh5801Cpu;
 use display::DisplayController;
 use interrupts::InterruptController;
+pub use joypad::Key;
 use joypad::Keyboard;
 use keyboard::KeyboardController;
-pub use joypad::Key;
+pub use lh5801::Lh5801Cpu;
 use memory::MemoryBus;
 pub use timing::FRAME_DURATION;
 
@@ -452,7 +452,7 @@ impl Pc1500 {
             self.cpu.x(),
             self.cpu.y()
         );
-        println!("  Flags: 0x{:02X}", self.cpu.flags());
+        println!("  Flags: 0x{:02X}", self.cpu.t());
         println!("  Cycles: {}", self.cycles_run);
 
         println!("\nDisplay Memory (first 20 bytes - PC-1500 addresses):");
@@ -485,7 +485,7 @@ impl Pc1500 {
             y: self.cpu.y(),
             u: self.cpu.u(),
             s: self.cpu.s(),
-            flags: self.cpu.flags(),
+            flags: self.cpu.t(),
         }
     }
 }
@@ -502,4 +502,3 @@ pub struct CpuState {
     pub s: u16,    // Stack pointer
     pub flags: u8, // Processor flags
 }
-
