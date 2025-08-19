@@ -1,4 +1,0 @@
-INFORME DE CONFLICTOS DE OPCODES - PC-1500 CPU EMULATOR
-========================================================
-
-Los siguientes opcodes tienen conflictos entre instrucciones principales y prefijos:

@@ -5,23 +5,11 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "ceres-egui"
-path = "src/main.rs"
-
-[[bin]]
-name = "pc1500-egui"
-path = "src/pc1500_main.rs"
-
 [dependencies.anyhow]
 version = "*"
 
 [dependencies.ceres-core]
 path = "../ceres-core"
-
-[dependencies.ceres-std]
-features = ["wgpu_renderer"]
-path = "../ceres-std"
 
 [dependencies.directories]
 version = "*"
@@ -33,6 +21,10 @@ features = ["accesskit", "default_fonts", "wayland", "wgpu"]
 
 [dependencies.rfd]
 version = "*"
+
+[dependencies.wgpu]
+version = "*"
+features = ["vulkan"]
 
 [dependencies.winit]
 version = "*"

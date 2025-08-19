@@ -10,7 +10,7 @@ use super::display::DisplayController;
 use super::joypad::Keyboard;
 
 /// PC-1500 ROM dump - includes the actual firmware from the calculator
-const PC1500_ROM: &[u8] = include_bytes!("/Users/mateo/Desktop/Carrera/TFG/Ceres/PC-1500_A04.ROM");
+const PC1500_ROM: &[u8] = include_bytes!("../../../pc1500-roms/bin/PC-1500_A04.ROM");
 
 /// Memory map constants
 pub mod map {

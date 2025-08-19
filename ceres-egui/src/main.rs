@@ -1,27 +1,14 @@
-mod app;
-mod screen;
-mod pc1500_keyboard;
 mod pc1500_app;
 
-use app::App;
-use ceres_std::{CERES_STYLIZED, ORGANIZATION, QUALIFIER, clap::Parser};
 use eframe::egui;
+use pc1500_app::Pc1500App;
 
 fn main() -> anyhow::Result<()> {
-    let args = ceres_std::Cli::parse();
-    let project_dirs = directories::ProjectDirs::from(QUALIFIER, ORGANIZATION, CERES_STYLIZED)
-        .ok_or_else(|| anyhow::anyhow!("couldn't get project directories"))?;
-
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([
-                ceres_std::DISPLAY_WIDTH as f32,
-                ceres_std::DISPLAY_HEIGHT as f32 + 22.0,
-            ])
-            .with_min_inner_size([
-                ceres_std::DISPLAY_WIDTH as f32,
-                ceres_std::DISPLAY_HEIGHT as f32 + 22.0,
-            ]),
+            .with_inner_size([800.0, 600.0])
+            .with_min_inner_size([600.0, 400.0])
+            .with_title("PC-1500 Emulator"),
         renderer: eframe::Renderer::Wgpu,
         vsync: true,
         depth_buffer: 0,
@@ -29,18 +16,11 @@ fn main() -> anyhow::Result<()> {
         centered: true,
         ..Default::default()
     };
+
     eframe::run_native(
-        CERES_STYLIZED,
+        "PC-1500 Emulator",
         options,
-        Box::new(move |cc| {
-            Ok(Box::new(App::new(
-                cc,
-                args.model(),
-                project_dirs,
-                args.file(),
-                args.shader_option(),
-            )?))
-        }),
+        Box::new(move |cc| Ok(Box::new(Pc1500App::new(cc)))),
     )
     .map_err(Into::into)
 }
