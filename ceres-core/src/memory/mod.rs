@@ -22,10 +22,12 @@ pub struct MemoryBus {
 
 impl MemoryBus {
     pub fn new() -> Self {
+        let standard_user_system_memory = [0xFF; STANDARD_USER_SYSTEM_MEMORY_SIZE];
+
         Self {
             rom: PC1500_ROM_BYTES,
             standard_user_memory: [0xFF; STANDARD_USER_MEMORY_SIZE],
-            standard_user_system_memory: [0xFF; STANDARD_USER_SYSTEM_MEMORY_SIZE],
+            standard_user_system_memory,
         }
     }
 

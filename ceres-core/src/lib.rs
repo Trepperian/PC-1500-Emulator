@@ -12,7 +12,7 @@ pub use lh5801::Lh5801Cpu;
 use memory::MemoryBus;
 
 pub const NANOS_PER_TICK: Duration = Duration::from_nanos(2600000 / 2);
-const TICKS_PER_FRAME: usize = 13;
+const TICKS_PER_FRAME: usize = 1000;
 
 pub struct Pc1500 {
     cpu: Lh5801Cpu,

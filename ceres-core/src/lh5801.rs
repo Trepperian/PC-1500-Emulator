@@ -905,7 +905,7 @@ impl Lh5801Cpu {
         let t = self.cpu_readop(memory, self.p);
         self.p = self.p.wrapping_add(1);
         self.add_state(8);
-        if self.ul().wrapping_sub(1) != 0 {
+        if self.ul() != 0 {
             self.add_state(3);
             self.p = self.p.wrapping_sub(u16::from(t));
         }
@@ -1223,6 +1223,8 @@ impl Lh5801Cpu {
     // }
     fn instruction_fd(&mut self, memory: &mut MemoryBus) {
         let oper = self.cpu_readop(memory, self.p);
+
+        println!("fd instruction: {:02X}", oper);
         self.p = self.p.wrapping_add(1);
 
         match oper {
@@ -1411,6 +1413,10 @@ impl Lh5801Cpu {
                 self.set_xh(dec);
                 self.add_state(9);
             }
+            0x48 => {
+                self.x = self.s;
+                self.add_state(11);
+            }
             0x4a => {
                 // X = X (no-op)
                 self.add_state(11);
@@ -1421,12 +1427,20 @@ impl Lh5801Cpu {
                 self.p = self.p.wrapping_add(1);
                 self.add_state(14);
             }
+            0x4c => {
+                self.bf = false; // off ! LOOK
+                self.add_state(8);
+            }
             0x4d => {
                 let read = self.cpu_readmem(memory, self.me1(self.x()));
                 let op = self.cpu_readop(memory, self.p);
                 self.p = self.p.wrapping_add(1);
                 self.bit(read, op);
                 self.add_state(14);
+            }
+            0x4e => {
+                self.s = self.x;
+                self.add_state(11);
             }
             0x4f => {
                 let op = self.cpu_readop(memory, self.p);
@@ -1445,7 +1459,7 @@ impl Lh5801Cpu {
                 self.add_state(9);
             }
             0x58 => {
-                self.y = self.x;
+                self.x = self.p;
                 self.add_state(11);
             }
             0x5a => {
@@ -1465,6 +1479,10 @@ impl Lh5801Cpu {
                 self.bit(read, op);
                 self.add_state(14);
             }
+            0x5e => {
+                self.jmp(self.x);
+                self.add_state(11);
+            }
             0x5f => {
                 let op = self.cpu_readop(memory, self.p);
                 self.add_mem(memory, self.me1(self.y()), op);
@@ -1480,10 +1498,6 @@ impl Lh5801Cpu {
                 let dec = self.dec(self.uh());
                 self.set_uh(dec);
                 self.add_state(9);
-            }
-            0x68 => {
-                self.u = self.x;
-                self.add_state(11);
             }
             0x6a => {
                 // U = U (no-op)
@@ -1935,6 +1949,8 @@ impl Lh5801Cpu {
     // }
     fn instruction(&mut self, memory: &mut MemoryBus) {
         let oper = self.cpu_readop(memory, self.p);
+
+        println!("instruction: {:02X}", oper);
         self.p = self.p.wrapping_add(1);
 
         match oper {
