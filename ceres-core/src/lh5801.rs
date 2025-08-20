@@ -177,6 +177,18 @@ impl Lh5801 {
     pub const fn timer_state(&self) -> usize {
         self.timer_state
     }
+
+    pub const fn display_enabled(&self) -> bool {
+        self.disp
+    }
+
+    pub const fn pu(&self) -> bool {
+        self.pu
+    }
+
+    pub const fn pv(&self) -> bool {
+        self.pv
+    }
 }
 
 impl Pc1500 {
@@ -236,7 +248,7 @@ impl Pc1500 {
         self.lh5801.reset_flag = true;
         self.lh5801.p = self.get_mem16(0xFFFE);
 
-        println!("Resetting CPU, PC set to {:04X}", self.lh5801.p);
+        // println!("Resetting CPU, PC set to {:04X}", self.lh5801.p);
 
         self.lh5801.a = 0;
         self.lh5801.t = 0;
@@ -250,6 +262,9 @@ impl Pc1500 {
         self.lh5801.ir2 = false;
         self.lh5801.timer_state = 0;
         self.lh5801.bf = true;
+        self.lh5801.tm = 0;
+        self.lh5801.pu = false;
+        self.lh5801.pv = false;
 
         self.lh5801.reset_flag = false;
     }
@@ -616,7 +631,11 @@ impl Pc1500 {
     // }
 
     fn sbc(&mut self, data: u8) {
-        self.lh5801.a = self.add_generic(self.lh5801.a, data ^ 0xff, self.get_carry_flag());
+        self.lh5801.a = self.add_generic(
+            self.lh5801.a as i16,
+            (data ^ 0xff) as i8 as i16,
+            self.get_carry_flag(),
+        );
     }
 
     // INLINE void CLH5801::CPA(UINT8 a, UINT8 b)
@@ -625,7 +644,7 @@ impl Pc1500 {
     // }
 
     fn cpa(&mut self, a: u8, b: u8) {
-        self.add_generic(a, b ^ 0xff, true);
+        self.add_generic(a as i16, (b ^ 0xff) as i8 as i16, true);
     }
 
     // INLINE UINT8 CLH5801::decimaladd_generic(int left, int right, int carry)
@@ -670,7 +689,11 @@ impl Pc1500 {
     // 	lh5801.a = decimaladd_generic(lh5801.a, data^0xff, bool(F_C));
     // }
     fn dcs(&mut self, data: u8) {
-        self.lh5801.a = self.decimaladd_generic(self.lh5801.a, data ^ 0xff, self.get_carry_flag());
+        self.lh5801.a = self.decimaladd_generic(
+            self.lh5801.a as i16,
+            (data ^ 0xff) as i8 as i16,
+            self.get_carry_flag(),
+        );
     }
 
     // INLINE void CLH5801::AND(UINT8 data)
@@ -1031,8 +1054,7 @@ impl Pc1500 {
     // }
     fn ror(&mut self) {
         let l = self.lh5801.a;
-        self.lh5801.a =
-            ((self.lh5801.a as u16 | (if self.get_carry_flag() { 1 } else { 0 } << 8)) >> 1) as u8;
+        self.lh5801.a = (self.lh5801.a >> 1) | (if self.get_carry_flag() { 1 } else { 0 } << 7);
 
         // flags cvhz
         self.check_c(l & 0x01);
@@ -1235,7 +1257,7 @@ impl Pc1500 {
     fn instruction_fd(&mut self) {
         let oper = self.cpu_readop(self.lh5801.p);
 
-        // println!("fd instruction: {:02X}", oper);
+        println!("fd instruction: {:02X}", oper);
         self.lh5801.p = self.lh5801.p.wrapping_add(1);
 
         match oper {
@@ -1428,14 +1450,20 @@ impl Pc1500 {
                 self.lh5801.x = self.lh5801.s;
                 self.add_state(11);
             }
+            0x49 => {
+                let op = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(self.me1(self.lh5801.x()), op);
+                self.add_state(17);
+            }
             0x4a => {
                 // X = X (no-op)
                 self.add_state(11);
             }
             0x4b => {
                 let op = self.cpu_readop(self.lh5801.p);
-                self.ora_mem(self.me1(self.lh5801.x()), op);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.ora_mem(self.me1(self.lh5801.x()), op);
                 self.add_state(14);
             }
             0x4c => {
@@ -1455,8 +1483,8 @@ impl Pc1500 {
             }
             0x4f => {
                 let op = self.cpu_readop(self.lh5801.p);
-                self.add_mem(self.me1(self.lh5801.x()), op);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(self.me1(self.lh5801.x()), op);
                 self.add_state(14);
             }
             0x50 => {
@@ -1473,14 +1501,21 @@ impl Pc1500 {
                 self.lh5801.x = self.lh5801.p;
                 self.add_state(11);
             }
+            0x59 => {
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
+                let op = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(read, op);
+                self.add_state(17);
+            }
             0x5a => {
-                // Y = Y (no-op)
+                self.lh5801.y = self.lh5801.x;
                 self.add_state(11);
             }
             0x5b => {
                 let op = self.cpu_readop(self.lh5801.p);
-                self.ora_mem(self.me1(self.lh5801.y()), op);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.ora_mem(self.me1(self.lh5801.y()), op);
                 self.add_state(14);
             }
             0x5d => {
@@ -1496,8 +1531,8 @@ impl Pc1500 {
             }
             0x5f => {
                 let op = self.cpu_readop(self.lh5801.p);
-                self.add_mem(self.me1(self.lh5801.y()), op);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(self.me1(self.lh5801.y()), op);
                 self.add_state(14);
             }
             0x60 => {
@@ -1510,14 +1545,21 @@ impl Pc1500 {
                 self.lh5801.set_uh(dec);
                 self.add_state(9);
             }
+            0x69 => {
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
+                let op = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(read, op);
+                self.add_state(17);
+            }
             0x6a => {
-                // U = U (no-op)
+                self.lh5801.u = self.lh5801.x;
                 self.add_state(11);
             }
             0x6b => {
                 let op = self.cpu_readop(self.lh5801.p);
-                self.ora_mem(self.me1(self.lh5801.u()), op);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.ora_mem(self.me1(self.lh5801.u()), op);
                 self.add_state(14);
             }
             0x6d => {
@@ -1529,8 +1571,8 @@ impl Pc1500 {
             }
             0x6f => {
                 let op = self.cpu_readop(self.lh5801.p);
-                self.add_mem(self.me1(self.lh5801.u()), op);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(self.me1(self.lh5801.u()), op);
                 self.add_state(17);
             }
             0x81 => {
@@ -1606,10 +1648,9 @@ impl Pc1500 {
                 self.add_state(17);
             }
             0xac => {
-                let op = self.readop_word();
-                let read = self.cpu_readmem(self.me1(op));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u));
                 self.dca(read);
-                self.add_state(17);
+                self.add_state(19);
             }
             0xad => {
                 let op = self.readop_word();
@@ -1629,7 +1670,7 @@ impl Pc1500 {
                 self.add_state(17);
             }
             0xb1 => {
-                self.lh5801.is_halted = false;
+                self.lh5801.is_halted = true; // HLT
                 self.add_state(8);
             }
             0xb8 => {
@@ -1692,8 +1733,8 @@ impl Pc1500 {
                 let op = self.readop_word();
                 let adr = self.me1(op);
                 let read = self.cpu_readop(self.lh5801.p);
-                self.and_mem(adr, read);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(adr, read);
                 self.add_state(23);
             }
             0xeb => {
@@ -1701,7 +1742,6 @@ impl Pc1500 {
                 let adr = self.me1(op);
                 let read = self.cpu_readop(self.lh5801.p);
                 self.ora_mem(adr, read);
-                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(23);
             }
             0xec => {
@@ -1710,19 +1750,18 @@ impl Pc1500 {
             }
             0xed => {
                 let op = self.readop_word();
-                let adr = self.me1(op);
-                let read = self.cpu_readmem(adr);
+                let read = self.cpu_readmem(self.me1(op));
                 let op2 = self.cpu_readop(self.lh5801.p);
-                self.bit(read, op2);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.bit(read, op2);
                 self.add_state(20);
             }
             0xef => {
                 let op = self.readop_word();
                 let adr = self.me1(op);
                 let op2 = self.cpu_readop(self.lh5801.p);
-                self.and_mem(adr, op2);
                 self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(adr, op2);
                 self.add_state(23);
             }
             _ => {
@@ -1961,7 +2000,7 @@ impl Pc1500 {
     fn instruction(&mut self) {
         let oper = self.cpu_readop(self.lh5801.p);
 
-        // println!("instruction: {:02X} at addr: {:04X}", oper, self.lh5801.p);
+        println!("instruction: {:02X} at addr: {:04X}", oper, self.lh5801.p);
         self.lh5801.p = self.lh5801.p.wrapping_add(1);
 
         match oper {
@@ -2858,15 +2897,15 @@ impl Pc1500 {
             }
             0xf5 => {
                 let val = self.cpu_readmem(self.lh5801.x);
-                self.cpu_writemem(self.lh5801.y, val);
                 self.lh5801.x = self.lh5801.x.wrapping_add(1);
+                self.cpu_writemem(self.lh5801.y, val);
                 self.lh5801.y = self.lh5801.y.wrapping_add(1);
                 self.add_state(7);
             } // TIN
             0xf7 => {
                 let val = self.cpu_readmem(self.lh5801.x);
-                self.cpa(self.lh5801.a, val);
                 self.lh5801.x = self.lh5801.x.wrapping_add(1);
+                self.cpa(self.lh5801.a, val);
                 self.add_state(7);
             } // CIN
             0xf9 => {

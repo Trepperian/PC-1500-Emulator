@@ -48,6 +48,10 @@ impl Pc1500 {
     pub fn update_display_buffer(&mut self) {
         self.display.clear();
 
+        if !self.lh5801.display_enabled() {
+            return;
+        }
+
         for ind in (0..0x4D).step_by(2) {
             let adr = 0x7600 + ind;
             let data = low(self.read_byte(adr)) | (low(self.read_byte(adr + 1)) << 4);
@@ -97,6 +101,8 @@ impl Pc1500 {
                 }
             }
         }
+
+        // self.clear_display_memory();
     }
 }
 

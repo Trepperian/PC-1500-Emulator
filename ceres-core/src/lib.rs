@@ -16,7 +16,7 @@ use memory::MemoryBus;
 use crate::{lh5810::Lh5810, pd1990ac::Pd1990ac};
 
 pub const NANOS_PER_TICK: Duration = Duration::from_nanos(2600000 / 2);
-const TICKS_PER_FRAME: usize = 10000;
+const TICKS_PER_FRAME: usize = 12000;
 
 pub struct Pc1500 {
     lh5801: Lh5801,
