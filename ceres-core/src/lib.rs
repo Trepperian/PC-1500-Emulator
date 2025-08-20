@@ -1,6 +1,7 @@
 pub mod display;
 pub mod keyboard;
 mod lh5801;
+mod lh5810;
 mod memory;
 mod pd1990ac;
 
