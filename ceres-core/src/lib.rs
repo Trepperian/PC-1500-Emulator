@@ -1,21 +1,22 @@
 pub mod display;
 pub mod keyboard;
-pub mod lh5801;
-pub mod memory;
+mod lh5801;
+mod memory;
+mod pd1990ac;
 
 use std::time::Duration;
 
 use display::DisplayController;
 pub use keyboard::Key;
 use keyboard::Keyboard;
-pub use lh5801::Lh5801Cpu;
+pub use lh5801::Lh5801;
 use memory::MemoryBus;
 
 pub const NANOS_PER_TICK: Duration = Duration::from_nanos(2600000 / 2);
 const TICKS_PER_FRAME: usize = 1000;
 
 pub struct Pc1500 {
-    cpu: Lh5801Cpu,
+    cpu: Lh5801,
     memory: MemoryBus,
     joypad: Keyboard,
     display: DisplayController,
@@ -27,7 +28,7 @@ impl Pc1500 {
         let mut memory = MemoryBus::new();
 
         Self {
-            cpu: Lh5801Cpu::new(&mut memory),
+            cpu: Lh5801::new(&mut memory),
             memory,
             joypad: Keyboard::new(),
             display: DisplayController::new(),

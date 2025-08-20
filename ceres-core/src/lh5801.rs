@@ -6,8 +6,10 @@ const ZF: u8 = 0x04; // Z: Zero flag
 const VF: u8 = 0x08; // V: Overflow flag
 const HF: u8 = 0x10; // H: Half carry flag
 
+// CPU
+
 #[derive(Debug, Default)]
-pub struct Lh5801Cpu {
+pub struct Lh5801 {
     a: u8,  // Accumulator
     t: u8,  // T register (contains flags: C, IE, Z, V, H)
     x: u16, // X index register
@@ -37,7 +39,7 @@ pub struct Lh5801Cpu {
     ticks: usize,
 }
 
-impl Lh5801Cpu {
+impl Lh5801 {
     pub fn get_ticks(&self) -> usize {
         self.ticks
     }
