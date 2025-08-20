@@ -60,6 +60,18 @@ pub struct Lh5810 {
 }
 
 impl Lh5810 {
+    pub fn new_opc(&self) -> bool {
+        self.new_opc
+    }
+
+    pub fn set_new_opc(&mut self, new_opc: bool) {
+        self.new_opc = new_opc;
+    }
+
+    pub fn set_irq(&mut self, irq: bool) {
+        self.irq = irq;
+    }
+
     // #define LH5810_PB7 ((lh5810.r_opb & 0x80) ? true : false)
     fn lh5810_pb7(&self) -> bool {
         (self.r_opb & 0x80) != 0
@@ -370,7 +382,7 @@ impl Lh5810 {
     //     clockOutput = false;
     //     //	OPA=OPB=0;
     // }
-    pub fn new_lh5810() -> Self {
+    pub fn new() -> Self {
         Self {
             new_g: true,
             new_f: true,
@@ -540,7 +552,7 @@ impl Lh5810 {
         if self.clock_output {
             if (timer_state - self.clock_rate_state) >= (self.clock_rate / 1) as usize {
                 self.clo = true;
-                self.bit_count += 1;
+                self.bit_count = self.bit_count.wrapping_add(1);
                 if self.bit_count == 9 {
                     self.set_reg_bit(Reg::IF, 3, true);
                 }

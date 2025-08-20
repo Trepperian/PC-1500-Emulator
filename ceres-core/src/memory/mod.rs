@@ -1,3 +1,5 @@
+use crate::{Pc1500, lh5810};
+
 const PC1500_ROM_BYTES: &[u8] = include_bytes!("../../../pc1500-roms/bin/PC-1500_A04.ROM");
 
 const STANDARD_USER_MEMORY_BEGIN: u32 = 0x4000;
@@ -15,9 +17,9 @@ const ROM_END: u32 = 0xFFFF;
 const ROM_SIZE: usize = (ROM_END - ROM_BEGIN + 1) as usize;
 
 pub struct MemoryBus {
-    rom: &'static [u8],
-    standard_user_memory: [u8; STANDARD_USER_MEMORY_SIZE],
-    standard_user_system_memory: [u8; STANDARD_USER_SYSTEM_MEMORY_SIZE],
+    pub rom: &'static [u8],
+    pub standard_user_memory: [u8; STANDARD_USER_MEMORY_SIZE],
+    pub standard_user_system_memory: [u8; STANDARD_USER_SYSTEM_MEMORY_SIZE],
 }
 
 impl MemoryBus {
@@ -30,25 +32,50 @@ impl MemoryBus {
             standard_user_system_memory,
         }
     }
+}
 
-    pub fn standard_user_memory(&self) -> &[u8; STANDARD_USER_MEMORY_SIZE] {
-        &self.standard_user_memory
-    }
+impl Pc1500 {
+    // INLINE quint8 Cpc15XX::lh5810_read(UINT32 d)
+    // {
+    //     switch (d) {
+    //     case 0x1F005: return (pLH5810->GetReg(CLH5810::U)); break;
+    //     case 0x1F006: return (pLH5810->GetReg(CLH5810::L)); break;
+    //     case 0x1F007: return (pLH5810->GetReg(CLH5810::F)); break;
+    //     case 0x1F008: return (pLH5810->GetReg(CLH5810::OPC)); break;
+    //     case 0x1F009: return (pLH5810->GetReg(CLH5810::G)); break;
+    //     case 0x1F00A: return (pLH5810->GetReg(CLH5810::MSK)); break;
+    //     case 0x1F00B: return (pLH5810->GetReg(CLH5810::IF)); break;
+    //     case 0x1F00C: return (pLH5810->GetReg(CLH5810::DDA)); break;
+    //     case 0x1F00D: return (pLH5810->GetReg(CLH5810::DDB)); break;
+    //     case 0x1F00E: return (pLH5810->GetReg(CLH5810::OPA)); break;
+    //     case 0x1F00F: return (pLH5810->GetReg(CLH5810::OPB)); break;
+    //     default: break;
+    //     }
 
-    pub fn read_byte(&self, addr: u32, pv: bool, pu: bool) -> u8 {
-        if addr > 0xFFFF {
-            panic!("Attempted to read memory out of bounds at {:04X}", addr);
-        }
+    //     return 0;
+    // }
 
+    pub fn read_byte(&self, addr: u32) -> u8 {
         match addr {
             STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
-                self.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize]
+                self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize]
             }
             STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
-                self.standard_user_system_memory
+                self.memory.standard_user_system_memory
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize]
             }
-            ROM_BEGIN..=ROM_END => self.rom[(addr - ROM_BEGIN) as usize],
+            ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
+            0x1F005 => self.lh5810.get_reg(lh5810::Reg::U),
+            0x1F006 => self.lh5810.get_reg(lh5810::Reg::L),
+            0x1F007 => self.lh5810.get_reg(lh5810::Reg::F),
+            0x1F008 => self.lh5810.get_reg(lh5810::Reg::OPC),
+            0x1F009 => self.lh5810.get_reg(lh5810::Reg::G),
+            0x1F00A => self.lh5810.get_reg(lh5810::Reg::MSK),
+            0x1F00B => self.lh5810.get_reg(lh5810::Reg::IF),
+            0x1F00C => self.lh5810.get_reg(lh5810::Reg::DDA),
+            0x1F00D => self.lh5810.get_reg(lh5810::Reg::DDB),
+            0x1F00E => self.lh5810.get_reg(lh5810::Reg::OPA),
+            0x1F00F => self.lh5810.get_reg(lh5810::Reg::OPB),
             _ => {
                 // Unmapped memory returns 0xFF
                 println!("Reading unmapped memory at {:04X}", addr);
@@ -59,18 +86,55 @@ impl MemoryBus {
         }
     }
 
-    pub fn write_byte(&mut self, addr: u32, pv: bool, pu: bool, value: u8) {
+    pub fn write_byte(&mut self, addr: u32, value: u8) {
         match addr {
             STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
-                self.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] = value;
+                self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] =
+                    value;
             }
             STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
-                self.standard_user_system_memory
+                self.memory.standard_user_system_memory
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
             }
             ROM_BEGIN..=ROM_END => {
                 // ROM is read-only, ignore writes
             }
+            0x1F004 => self
+                .lh5810
+                .set_reg(lh5810::Reg::RESET, value, self.lh5801.timer_state()),
+            0x1F005 => self
+                .lh5810
+                .set_reg(lh5810::Reg::U, value, self.lh5801.timer_state()),
+            0x1F006 => self
+                .lh5810
+                .set_reg(lh5810::Reg::L, value, self.lh5801.timer_state()),
+            0x1F007 => self
+                .lh5810
+                .set_reg(lh5810::Reg::F, value, self.lh5801.timer_state()),
+            0x1F008 => self
+                .lh5810
+                .set_reg(lh5810::Reg::OPC, value, self.lh5801.timer_state()),
+            0x1F009 => self
+                .lh5810
+                .set_reg(lh5810::Reg::G, value, self.lh5801.timer_state()),
+            0x1F00A => self
+                .lh5810
+                .set_reg(lh5810::Reg::MSK, value, self.lh5801.timer_state()),
+            0x1F00B => self
+                .lh5810
+                .set_reg(lh5810::Reg::IF, value, self.lh5801.timer_state()),
+            0x1F00C => self
+                .lh5810
+                .set_reg(lh5810::Reg::DDA, value, self.lh5801.timer_state()),
+            0x1F00D => self
+                .lh5810
+                .set_reg(lh5810::Reg::DDB, value, self.lh5801.timer_state()),
+            0x1F00E => self
+                .lh5810
+                .set_reg(lh5810::Reg::OPA, value, self.lh5801.timer_state()),
+            0x1F00F => self
+                .lh5810
+                .set_reg(lh5810::Reg::OPB, value, self.lh5801.timer_state()),
             _ => {
                 // Unmapped memory, ignore writes
                 // panic!("Attempted to write to unmapped memory at {:04X}", addr);

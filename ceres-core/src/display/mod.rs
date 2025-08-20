@@ -1,4 +1,4 @@
-use crate::memory;
+use crate::Pc1500;
 
 pub const DISPLAY_WIDTH: usize = 156;
 pub const DISPLAY_HEIGHT: usize = 7;
@@ -42,60 +42,58 @@ impl DisplayController {
     fn clear(&mut self) {
         self.rgba_buffer.fill(0xff);
     }
+}
 
-    pub fn update_buffer(&mut self, memory: &memory::MemoryBus) {
-        self.clear();
+impl Pc1500 {
+    pub fn update_display_buffer(&mut self) {
+        self.display.clear();
 
         for ind in (0..0x4D).step_by(2) {
             let adr = 0x7600 + ind;
-            let data = low(memory.read_byte(adr, false, false))
-                | (low(memory.read_byte(adr + 1, false, false)) << 4);
+            let data = low(self.read_byte(adr)) | (low(self.read_byte(adr + 1)) << 4);
             let x = ind >> 1;
 
             for b in 0..7 {
                 if (data >> b) & 0x01 != 0 {
-                    self.draw_black_pixel(x as usize, b);
+                    self.display.draw_black_pixel(x as usize, b);
                 } else {
-                    self.draw_white_pixel(x as usize, b);
+                    self.display.draw_white_pixel(x as usize, b);
                 }
             }
 
-            let data = high(memory.read_byte(adr, false, false))
-                | (high(memory.read_byte(adr + 1, false, false)) << 4);
+            let data = high(self.read_byte(adr)) | (high(self.read_byte(adr + 1)) << 4);
             let x = x + 78;
 
             for b in 0..7 {
                 if (data >> b) & 0x01 != 0 {
-                    self.draw_black_pixel(x as usize, b);
+                    self.display.draw_black_pixel(x as usize, b);
                 } else {
-                    self.draw_white_pixel(x as usize, b);
+                    self.display.draw_white_pixel(x as usize, b);
                 }
             }
         }
 
         for ind in (0..0x4D).step_by(2) {
             let adr = 0x7700 + ind;
-            let data = low(memory.read_byte(adr, false, false))
-                | (low(memory.read_byte(adr + 1, false, false)) << 4);
+            let data = low(self.read_byte(adr)) | (low(self.read_byte(adr + 1)) << 4);
             let x = (ind >> 1) + 39;
 
             for b in 0..7 {
                 if (data >> b) & 0x01 != 0 {
-                    self.draw_black_pixel(x as usize, b);
+                    self.display.draw_black_pixel(x as usize, b);
                 } else {
-                    self.draw_white_pixel(x as usize, b);
+                    self.display.draw_white_pixel(x as usize, b);
                 }
             }
 
-            let data = high(memory.read_byte(adr, false, false))
-                | (high(memory.read_byte(adr + 1, false, false)) << 4);
+            let data = high(self.read_byte(adr)) | (high(self.read_byte(adr + 1)) << 4);
             let x = x + 78;
 
             for b in 0..7 {
                 if (data >> b) & 0x01 != 0 {
-                    self.draw_black_pixel(x as usize, b);
+                    self.display.draw_black_pixel(x as usize, b);
                 } else {
-                    self.draw_white_pixel(x as usize, b);
+                    self.display.draw_white_pixel(x as usize, b);
                 }
             }
         }

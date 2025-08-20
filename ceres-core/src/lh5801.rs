@@ -1,4 +1,4 @@
-use crate::memory::MemoryBus;
+use crate::Pc1500;
 
 const CF: u8 = 0x01; // C: Carry flag
 const IE: u8 = 0x02; // IE: Interrupt enable flag  
@@ -40,200 +40,6 @@ pub struct Lh5801 {
 }
 
 impl Lh5801 {
-    pub fn get_ticks(&self) -> usize {
-        self.ticks
-    }
-
-    pub fn set_ticks(&mut self, ticks: usize) {
-        self.ticks = ticks;
-    }
-
-    pub fn new(memory: &mut MemoryBus) -> Self {
-        let mut ret = Self::default();
-        ret.internal_reset(memory);
-        ret
-    }
-
-    // UINT32	CLH5801::get_mem(UINT32 adr,int size)
-    // {
-    // 	switch(size)
-    // 	{
-    //     case 8:
-    // 	case SIZE_8 :return( cpu_readmem(adr));
-    //     case 16:
-    //     case SIZE_16:return( cpu_readmem(adr+1)+(cpu_readmem(adr)<<8));
-    //     case 20:
-    //     case SIZE_20:return((cpu_readmem(adr+2)+(cpu_readmem(adr+1)<<8)+(cpu_readmem(adr)<<16))&MASK_20);
-    //     case 24:
-    //     case SIZE_24:return((cpu_readmem(adr+2)+(cpu_readmem(adr+1)<<8)+(cpu_readmem(adr)<<16))&MASK_24);
-    // 	}
-    // 	return(0);
-    // }
-    // TODO: unnafected by PV and PU?
-    fn get_mem16(memory: &mut MemoryBus, addr: u32) -> u16 {
-        (memory.read_byte(addr.wrapping_add(1), false, false) as u16)
-            | ((memory.read_byte(addr, false, false) as u16) << 8)
-    }
-
-    // void CLH5801::Reset(void)
-    // {
-    //     resetFlag = true;
-    // }
-    fn reset(&mut self) {
-        self.reset_flag = true;
-    }
-
-    // void CLH5801::internalReset(void)
-    // {
-    //     resetFlag = true;
-    //     memset(imem,0,imemsize);
-    //     P	= (UINT16) get_mem(0xFFFE,SIZE_16);
-    //     lh5801.HLT=lh5801.IR0=lh5801.IR1=lh5801.IR2=0;
-    //     S	= 0;
-    //     U	= 0;
-    //     UL	= 0;
-    //     UH	= 0;
-    //     X	= 0;
-    //     XL	= 0;
-    //     XH	= 0;
-    //     Y	= 0;
-    //     YL	= 0;
-    //     YH	= 0;
-    //     lh5801.tm=0; //9 bit
-    //     lh5801.t=lh5801.a=lh5801.dp=lh5801.pu=lh5801.pv=0;
-    //     lh5801.bf=1;
-    //     CallSubLevel = 0;
-
-    //     resetFlag = false;
-    // }
-    // FIXME: wrong
-    fn internal_reset(&mut self, memory: &mut MemoryBus) {
-        self.reset_flag = true;
-        self.p = Self::get_mem16(memory, 0xFFFE);
-
-        println!("Resetting CPU, PC set to {:04X}", self.p);
-
-        self.a = 0;
-        self.t = 0;
-        self.x = 0;
-        self.y = 0;
-        self.u = 0;
-        self.s = 0;
-        self.is_halted = false;
-        self.ir0 = false;
-        self.ir1 = false;
-        self.ir2 = false;
-        self.timer_state = 0;
-        self.bf = true;
-
-        self.reset_flag = false;
-    }
-
-    // void CLH5801::step(void)
-    // {
-
-    //     quint64	Current_State;
-
-    //     if (resetFlag) internalReset();
-
-    //     if (Is_Timer_Reached) { lh5801.IR1=1; Is_Timer_Reached = false; }
-
-    // 	if (lh5801.IR0)
-    // 	{
-    // 		// Non-maskable Interrupt processing
-    // 		// NOT USED - Connected to Ground
-    // 	}
-    // 	else
-    // 	if ( (lh5801.IR1) && F_IE )
-    // 	{
-    // 		// Timer Interrupt Routine
-    // 		PUSH(lh5801.t);
-    // 		UNSET_IE;
-    // 		lh5801.IR1=0;
-    // 		PUSH_WORD(P);
-    // 		P = (UINT16) get_mem(0xFFFA,SIZE_16);
-    //         CallSubLevel++;
-
-    // 	}
-    // 	else
-    // 	if ( (lh5801.IR2) && F_IE )
-    // 	{
-
-    // 		// Maskable Interrupt processing
-    // 		PUSH(lh5801.t);
-    // 		UNSET_IE;
-    //         lh5801.HLT = false;
-    // 		lh5801.IR2=0;
-    // 		PUSH_WORD(P);
-    // 		P = (UINT16) get_mem(0xFFF8,SIZE_16);
-    //         CallSubLevel++;
-
-    // 	}
-    // 	else
-    // 	if (lh5801.HLT)
-    // 	{
-    // 		// Do nothing
-    //         AddState(2);
-    // 	}
-    // 	else
-    // 	{
-    // 		instruction();
-    // 	}
-
-    // #define TIMER_FREQUENCY 31250
-    // #define NB_STATE_PER_TIMER	42
-
-    // 	// INCREMENT TIMER
-    // 	Current_State = pPC->pTIMER->state;
-
-    // 	if ((Current_State - step_Previous_State) >= 42)
-    // 	{
-    // 		TIMER_INC();
-    // 		step_Previous_State += (Current_State - step_Previous_State);
-    // 	}
-
-    // }
-    pub fn step(&mut self, memory: &mut MemoryBus) {
-        if self.reset_flag {
-            self.internal_reset(memory);
-        }
-
-        if self.is_timer_reached {
-            self.ir1 = true; // Timer interrupt
-            self.is_timer_reached = false;
-        }
-
-        if self.ir0 {
-            // Non-maskable Interrupt processing
-            // NOT USED - Connected to Ground
-        } else if self.ir1 && self.interrupt_enabled() {
-            self.push(memory, self.t);
-            self.set_flag(IE, false); // Unset interrupt enable flag
-            self.ir1 = false;
-            self.push_word(memory, self.p);
-            self.p = Self::get_mem16(memory, 0xFFFA);
-        } else if self.ir2 && self.interrupt_enabled() {
-            // Maskable Interrupt processing
-            self.push(memory, self.t);
-            self.set_flag(IE, false); // Unset interrupt enable flag
-            self.ir2 = false;
-            self.push_word(memory, self.p);
-            self.p = Self::get_mem16(memory, 0xFFF8);
-        } else if self.is_halted {
-            // Do nothing
-            self.add_state(2);
-        } else {
-            self.instruction(memory);
-        }
-
-        let current_state = self.timer_state;
-
-        if current_state - self.step_previous_state >= 42 {
-            self.timer_inc();
-            self.step_previous_state += current_state - self.step_previous_state;
-        }
-    }
-
     #[must_use]
     pub const fn a(&self) -> u8 {
         self.a
@@ -354,20 +160,219 @@ impl Lh5801 {
         self.u = (self.u & 0x00FF) | (u16::from(val) << 8);
     }
 
-    fn cpu_readmem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) -> u8 {
-        memory.read_byte(addr.into(), self.pv, self.pu)
+    pub fn get_ticks(&self) -> usize {
+        self.ticks
     }
 
-    fn cpu_writemem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, val: u8) {
-        memory.write_byte(addr.into(), self.pv, self.pu, val);
+    pub fn set_ticks(&mut self, ticks: usize) {
+        self.ticks = ticks;
+    }
+
+    pub fn new() -> Self {
+        let mut ret = Lh5801::default();
+        ret.reset_flag = true;
+        ret
+    }
+
+    pub const fn timer_state(&self) -> usize {
+        self.timer_state
+    }
+}
+
+impl Pc1500 {
+    // UINT32	CLH5801::get_mem(UINT32 adr,int size)
+    // {
+    // 	switch(size)
+    // 	{
+    //     case 8:
+    // 	case SIZE_8 :return( cpu_readmem(adr));
+    //     case 16:
+    //     case SIZE_16:return( cpu_readmem(adr+1)+(cpu_readmem(adr)<<8));
+    //     case 20:
+    //     case SIZE_20:return((cpu_readmem(adr+2)+(cpu_readmem(adr+1)<<8)+(cpu_readmem(adr)<<16))&MASK_20);
+    //     case 24:
+    //     case SIZE_24:return((cpu_readmem(adr+2)+(cpu_readmem(adr+1)<<8)+(cpu_readmem(adr)<<16))&MASK_24);
+    // 	}
+    // 	return(0);
+    // }
+    // TODO: unnafected by PV and PU?
+    fn get_mem16(&self, addr: u32) -> u16 {
+        (self.read_byte(addr.wrapping_add(1)) as u16) | ((self.read_byte(addr) as u16) << 8)
+    }
+
+    // void CLH5801::Reset(void)
+    // {
+    //     resetFlag = true;
+    // }
+    fn reset(&mut self) {
+        self.lh5801.reset_flag = true;
+    }
+
+    // void CLH5801::internalReset(void)
+    // {
+    //     resetFlag = true;
+    //     memset(imem,0,imemsize);
+    //     P	= (UINT16) get_mem(0xFFFE,SIZE_16);
+    //     lh5801.HLT=lh5801.IR0=lh5801.IR1=lh5801.IR2=0;
+    //     S	= 0;
+    //     U	= 0;
+    //     UL	= 0;
+    //     UH	= 0;
+    //     X	= 0;
+    //     XL	= 0;
+    //     XH	= 0;
+    //     Y	= 0;
+    //     YL	= 0;
+    //     YH	= 0;
+    //     lh5801.tm=0; //9 bit
+    //     lh5801.t=lh5801.a=lh5801.dp=lh5801.pu=lh5801.pv=0;
+    //     lh5801.bf=1;
+    //     CallSubLevel = 0;
+
+    //     resetFlag = false;
+    // }
+    // FIXME: wrong
+    fn cpu_internal_reset(&mut self) {
+        self.lh5801.reset_flag = true;
+        self.lh5801.p = self.get_mem16(0xFFFE);
+
+        println!("Resetting CPU, PC set to {:04X}", self.lh5801.p);
+
+        self.lh5801.a = 0;
+        self.lh5801.t = 0;
+        self.lh5801.x = 0;
+        self.lh5801.y = 0;
+        self.lh5801.u = 0;
+        self.lh5801.s = 0;
+        self.lh5801.is_halted = false;
+        self.lh5801.ir0 = false;
+        self.lh5801.ir1 = false;
+        self.lh5801.ir2 = false;
+        self.lh5801.timer_state = 0;
+        self.lh5801.bf = true;
+
+        self.lh5801.reset_flag = false;
+    }
+
+    // void CLH5801::step(void)
+    // {
+
+    //     quint64	Current_State;
+
+    //     if (resetFlag) internalReset();
+
+    //     if (Is_Timer_Reached) { lh5801.IR1=1; Is_Timer_Reached = false; }
+
+    // 	if (lh5801.IR0)
+    // 	{
+    // 		// Non-maskable Interrupt processing
+    // 		// NOT USED - Connected to Ground
+    // 	}
+    // 	else
+    // 	if ( (lh5801.IR1) && F_IE )
+    // 	{
+    // 		// Timer Interrupt Routine
+    // 		PUSH(lh5801.t);
+    // 		UNSET_IE;
+    // 		lh5801.IR1=0;
+    // 		PUSH_WORD(P);
+    // 		P = (UINT16) get_mem(0xFFFA,SIZE_16);
+    //         CallSubLevel++;
+
+    // 	}
+    // 	else
+    // 	if ( (lh5801.IR2) && F_IE )
+    // 	{
+
+    // 		// Maskable Interrupt processing
+    // 		PUSH(lh5801.t);
+    // 		UNSET_IE;
+    //         lh5801.HLT = false;
+    // 		lh5801.IR2=0;
+    // 		PUSH_WORD(P);
+    // 		P = (UINT16) get_mem(0xFFF8,SIZE_16);
+    //         CallSubLevel++;
+
+    // 	}
+    // 	else
+    // 	if (lh5801.HLT)
+    // 	{
+    // 		// Do nothing
+    //         AddState(2);
+    // 	}
+    // 	else
+    // 	{
+    // 		instruction();
+    // 	}
+
+    // #define TIMER_FREQUENCY 31250
+    // #define NB_STATE_PER_TIMER	42
+
+    // 	// INCREMENT TIMER
+    // 	Current_State = pPC->pTIMER->state;
+
+    // 	if ((Current_State - step_Previous_State) >= 42)
+    // 	{
+    // 		TIMER_INC();
+    // 		step_Previous_State += (Current_State - step_Previous_State);
+    // 	}
+
+    // }
+    pub fn step_cpu(&mut self) {
+        if self.lh5801.reset_flag {
+            self.cpu_internal_reset();
+        }
+
+        if self.lh5801.is_timer_reached {
+            self.lh5801.ir1 = true; // Timer interrupt
+            self.lh5801.is_timer_reached = false;
+        }
+
+        if self.lh5801.ir0 {
+            // Non-maskable Interrupt processing
+            // NOT USED - Connected to Ground
+        } else if self.lh5801.ir1 && self.lh5801.interrupt_enabled() {
+            self.push(self.lh5801.t);
+            self.set_flag(IE, false); // Unset interrupt enable flag
+            self.lh5801.ir1 = false;
+            self.push_word(self.lh5801.p);
+            self.lh5801.p = self.get_mem16(0xFFFA);
+        } else if self.lh5801.ir2 && self.lh5801.interrupt_enabled() {
+            // Maskable Interrupt processing
+            self.push(self.lh5801.t);
+            self.set_flag(IE, false); // Unset interrupt enable flag
+            self.lh5801.ir2 = false;
+            self.push_word(self.lh5801.p);
+            self.lh5801.p = self.get_mem16(0xFFF8);
+        } else if self.lh5801.is_halted {
+            // Do nothing
+            self.add_state(2);
+        } else {
+            self.instruction();
+        }
+
+        let current_state = self.lh5801.timer_state;
+
+        if current_state - self.lh5801.step_previous_state >= 42 {
+            self.timer_inc();
+            self.lh5801.step_previous_state += current_state - self.lh5801.step_previous_state;
+        }
+    }
+
+    fn cpu_readmem<I: Into<u32> + Copy>(&mut self, addr: I) -> u8 {
+        self.read_byte(addr.into())
+    }
+
+    fn cpu_writemem<I: Into<u32> + Copy>(&mut self, addr: I, val: u8) {
+        self.write_byte(addr.into(), val);
     }
 
     // INLINE UINT8 CLH5801::cpu_readop(UINT32 adr)
     // {
     //     return (pPC->Get_8(adr));
     // }
-    fn cpu_readop<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) -> u8 {
-        memory.read_byte(addr.into(), self.pv, self.pu)
+    fn cpu_readop<I: Into<u32> + Copy>(&mut self, addr: I) -> u8 {
+        self.read_byte(addr.into())
     }
 
     // INLINE UINT16 CLH5801::readop_word(void)
@@ -375,11 +380,11 @@ impl Lh5801 {
     // 	return (UINT16) ((cpu_readop(P++) << 8) | cpu_readop(P++));
     // }
     // FIXME: is this truly big-endian?
-    fn readop_word(&mut self, memory: &mut MemoryBus) -> u16 {
-        let hi = self.cpu_readop(memory, self.p) as u16;
-        self.p = self.p.wrapping_add(1);
-        let lo = self.cpu_readop(memory, self.p) as u16;
-        self.p = self.p.wrapping_add(1);
+    fn readop_word(&mut self) -> u16 {
+        let hi = self.cpu_readop(self.lh5801.p) as u16;
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
+        let lo = self.cpu_readop(self.lh5801.p) as u16;
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
         (hi << 8) | lo
     }
 
@@ -392,14 +397,14 @@ impl Lh5801 {
     // === FLAG OPERATIONS ===
 
     const fn get_flag(&self, flag: u8) -> bool {
-        self.t & flag != 0
+        self.lh5801.t & flag != 0
     }
 
     fn set_flag(&mut self, flag: u8, value: bool) {
         if value {
-            self.t |= flag;
+            self.lh5801.t |= flag;
         } else {
-            self.t &= !flag;
+            self.lh5801.t &= !flag;
         }
     }
 
@@ -464,8 +469,9 @@ impl Lh5801 {
     // }
     fn timer_inc(&mut self) {
         // Shift right , b9=(b0 xor b4)
-        self.tm = (self.tm >> 1) | (((self.tm & 0x01) ^ ((self.tm & 0x10) >> 4)) << 8);
-        self.is_timer_reached = self.tm == 0x1FF;
+        self.lh5801.tm = (self.lh5801.tm >> 1)
+            | (((self.lh5801.tm & 0x01) ^ ((self.lh5801.tm & 0x10) >> 4)) << 8);
+        self.lh5801.is_timer_reached = self.lh5801.tm == 0x1FF;
     }
 
     // INLINE void CLH5801::PUSH(UINT8 data)
@@ -473,9 +479,9 @@ impl Lh5801 {
     // 	cpu_writemem(S--, data);
     // }
 
-    fn push(&mut self, memory: &mut MemoryBus, value: u8) {
-        self.cpu_writemem(memory, self.s, value);
-        self.s = self.s.wrapping_sub(1);
+    fn push(&mut self, value: u8) {
+        self.cpu_writemem(self.lh5801.s, value);
+        self.lh5801.s = self.lh5801.s.wrapping_sub(1);
     }
 
     // INLINE void CLH5801::PUSH_WORD(UINT16 data)
@@ -484,9 +490,9 @@ impl Lh5801 {
     // 	PUSH( (UINT8) (data >> 8));
     // }
 
-    fn push_word(&mut self, memory: &mut MemoryBus, value: u16) {
-        self.push(memory, (value & 0xFF) as u8);
-        self.push(memory, (value >> 8) as u8);
+    fn push_word(&mut self, value: u16) {
+        self.push((value & 0xFF) as u8);
+        self.push((value >> 8) as u8);
     }
 
     // INLINE void CLH5801::POP(void)
@@ -495,10 +501,10 @@ impl Lh5801 {
     // 	CHECK_Z(lh5801.a);
     // }
 
-    fn pop(&mut self, memory: &mut MemoryBus) {
-        self.s = self.s.wrapping_add(1);
-        self.a = self.cpu_readmem(memory, self.s);
-        self.check_z(self.a);
+    fn pop(&mut self) {
+        self.lh5801.s = self.lh5801.s.wrapping_add(1);
+        self.lh5801.a = self.cpu_readmem(self.lh5801.s);
+        self.check_z(self.lh5801.a);
     }
 
     // INLINE void CLH5801::POP_WORD(PAIR *reg)
@@ -507,11 +513,11 @@ impl Lh5801 {
     // 	reg->b.l = cpu_readmem(++S);
     // }
 
-    fn pop_word(&mut self, memory: &mut MemoryBus) -> u16 {
-        self.s = self.s.wrapping_add(1);
-        let hi = u16::from(self.cpu_readmem(memory, self.s));
-        self.s = self.s.wrapping_add(1);
-        let lo = u16::from(self.cpu_readmem(memory, self.s));
+    fn pop_word(&mut self) -> u16 {
+        self.lh5801.s = self.lh5801.s.wrapping_add(1);
+        let hi = u16::from(self.cpu_readmem(self.lh5801.s));
+        self.lh5801.s = self.lh5801.s.wrapping_add(1);
+        let lo = u16::from(self.cpu_readmem(self.lh5801.s));
         (hi << 8) | lo
     }
 
@@ -541,7 +547,7 @@ impl Lh5801 {
         let res = left + right + carry_i16;
 
         // Clear affected flags first (H|V|Z|C in C++ code)
-        self.t &= !(HF | VF | ZF | CF);
+        self.lh5801.t &= !(HF | VF | ZF | CF);
 
         self.check_z(res & 0xff);
 
@@ -569,7 +575,7 @@ impl Lh5801 {
     // }
 
     fn adc(&mut self, data: u8) {
-        self.a = self.add_generic(self.a, data, self.get_carry_flag());
+        self.lh5801.a = self.add_generic(self.lh5801.a, data, self.get_carry_flag());
     }
 
     // INLINE void CLH5801::ADD_MEM(UINT32 addr, UINT8 data)
@@ -578,10 +584,10 @@ impl Lh5801 {
     // 	cpu_writemem(addr,v);
     // }
 
-    fn add_mem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, data: u8) {
-        let mem_read = self.cpu_readmem(memory, addr);
+    fn add_mem<I: Into<u32> + Copy>(&mut self, addr: I, data: u8) {
+        let mem_read = self.cpu_readmem(addr);
         let v = self.add_generic(mem_read, data, false);
-        self.cpu_writemem(memory, addr, v);
+        self.cpu_writemem(addr, v);
     }
 
     // INLINE void CLH5801::ADR(PAIR *reg)
@@ -596,11 +602,11 @@ impl Lh5801 {
     // }
 
     fn adr(&mut self, reg: u16) -> u16 {
-        let loc_t = self.t; // Record Flags
+        let loc_t = self.lh5801.t; // Record Flags
         let rl = (reg & 0xFF) as u8;
-        let ret = (reg & 0xFF00) | (self.add_generic(rl, self.a, false)) as u16;
+        let ret = (reg & 0xFF00) | (self.add_generic(rl, self.lh5801.a, false)) as u16;
 
-        self.t = loc_t; // Restore Flags: OFFICIAL DOCUMENTATION IS WRONG, flags are not impacted
+        self.lh5801.t = loc_t; // Restore Flags: OFFICIAL DOCUMENTATION IS WRONG, flags are not impacted
         ret
     }
 
@@ -610,7 +616,7 @@ impl Lh5801 {
     // }
 
     fn sbc(&mut self, data: u8) {
-        self.a = self.add_generic(self.a, data ^ 0xff, self.get_carry_flag());
+        self.lh5801.a = self.add_generic(self.lh5801.a, data ^ 0xff, self.get_carry_flag());
     }
 
     // INLINE void CLH5801::CPA(UINT8 a, UINT8 b)
@@ -656,7 +662,7 @@ impl Lh5801 {
     // 	lh5801.a = decimaladd_generic(lh5801.a + 0x66, data, bool(F_C));
     // }
     fn dca(&mut self, data: u8) {
-        self.a = self.decimaladd_generic(self.a + 0x66, data, self.get_carry_flag());
+        self.lh5801.a = self.decimaladd_generic(self.lh5801.a + 0x66, data, self.get_carry_flag());
     }
 
     // INLINE void CLH5801::DCS(UINT8 data)
@@ -664,7 +670,7 @@ impl Lh5801 {
     // 	lh5801.a = decimaladd_generic(lh5801.a, data^0xff, bool(F_C));
     // }
     fn dcs(&mut self, data: u8) {
-        self.a = self.decimaladd_generic(self.a, data ^ 0xff, self.get_carry_flag());
+        self.lh5801.a = self.decimaladd_generic(self.lh5801.a, data ^ 0xff, self.get_carry_flag());
     }
 
     // INLINE void CLH5801::AND(UINT8 data)
@@ -673,8 +679,8 @@ impl Lh5801 {
     // 	CHECK_Z(lh5801.a);
     // }
     fn and(&mut self, data: u8) {
-        self.a &= data;
-        self.check_z(self.a);
+        self.lh5801.a &= data;
+        self.check_z(self.lh5801.a);
     }
 
     // INLINE void CLH5801::AND_MEM(UINT32 addr, UINT8 data)
@@ -684,10 +690,10 @@ impl Lh5801 {
     // 	cpu_writemem(addr,data);
     // }
 
-    fn and_mem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, data: u8) {
-        let data = data & self.cpu_readmem(memory, addr);
+    fn and_mem<I: Into<u32> + Copy>(&mut self, addr: I, data: u8) {
+        let data = data & self.cpu_readmem(addr);
         self.check_z(data);
-        self.cpu_writemem(memory, addr, data);
+        self.cpu_writemem(addr, data);
     }
 
     // INLINE void CLH5801::BIT(UINT8 a, UINT8 b)
@@ -704,8 +710,8 @@ impl Lh5801 {
     // 	CHECK_Z(lh5801.a);
     // }
     fn eor(&mut self, data: u8) {
-        self.a ^= data;
-        self.check_z(self.a);
+        self.lh5801.a ^= data;
+        self.check_z(self.lh5801.a);
     }
 
     // INLINE void CLH5801::ORA(UINT8 data)
@@ -714,8 +720,8 @@ impl Lh5801 {
     // 	CHECK_Z(lh5801.a);
     // }
     fn ora(&mut self, data: u8) {
-        self.a |= data;
-        self.check_z(self.a);
+        self.lh5801.a |= data;
+        self.check_z(self.lh5801.a);
     }
 
     // INLINE void CLH5801::ORA_MEM(UINT32 addr, UINT8 data)
@@ -724,10 +730,10 @@ impl Lh5801 {
     // 	CHECK_Z(data);
     // 	cpu_writemem(addr,data);
     // }
-    fn ora_mem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, mut data: u8) {
-        data |= self.cpu_readmem(memory, addr);
+    fn ora_mem<I: Into<u32> + Copy>(&mut self, addr: I, mut data: u8) {
+        data |= self.cpu_readmem(addr);
         self.check_z(data);
-        self.cpu_writemem(memory, addr, data);
+        self.cpu_writemem(addr, data);
     }
 
     // INLINE void CLH5801::LDA(UINT8 data)
@@ -736,7 +742,7 @@ impl Lh5801 {
     // 	CHECK_Z(data);
     // }
     fn lda(&mut self, data: u8) {
-        self.a = data;
+        self.lh5801.a = data;
         self.check_z(data);
     }
 
@@ -746,10 +752,10 @@ impl Lh5801 {
     // 	lh5801.a = cpu_readmem(reg->w--);
     // 	CHECK_Z(lh5801.a);
     // }
-    fn lde(&mut self, memory: &mut MemoryBus, reg: u16) -> u16 {
-        self.a = self.cpu_readmem(memory, reg);
+    fn lde(&mut self, reg: u16) -> u16 {
+        self.lh5801.a = self.cpu_readmem(reg);
         let ret = reg.wrapping_sub(1);
-        self.check_z(self.a);
+        self.check_z(self.lh5801.a);
         ret
     }
 
@@ -757,8 +763,8 @@ impl Lh5801 {
     // {
     // 	cpu_writemem(reg->w--, lh5801.a);
     // }
-    fn sde(&mut self, memory: &mut MemoryBus, reg: u16) -> u16 {
-        self.cpu_writemem(memory, reg, self.a);
+    fn sde(&mut self, reg: u16) -> u16 {
+        self.cpu_writemem(reg, self.lh5801.a);
         reg.wrapping_sub(1)
     }
 
@@ -768,10 +774,10 @@ impl Lh5801 {
     // 	lh5801.a = cpu_readmem(reg->w++);
     // 	CHECK_Z(lh5801.a);
     // }
-    fn lin(&mut self, memory: &mut MemoryBus, reg: u16) -> u16 {
-        self.a = self.cpu_readmem(memory, reg);
+    fn lin(&mut self, reg: u16) -> u16 {
+        self.lh5801.a = self.cpu_readmem(reg);
         let ret = reg.wrapping_add(1);
-        self.check_z(self.a);
+        self.check_z(self.lh5801.a);
         ret
     }
 
@@ -779,8 +785,8 @@ impl Lh5801 {
     // {
     // 	cpu_writemem(reg->w++, lh5801.a);
     // }
-    fn sin(&mut self, memory: &mut MemoryBus, reg: u16) -> u16 {
-        self.cpu_writemem(memory, reg, self.a);
+    fn sin(&mut self, reg: u16) -> u16 {
+        self.cpu_writemem(reg, self.lh5801.a);
         reg.wrapping_add(1)
     }
 
@@ -813,13 +819,13 @@ impl Lh5801 {
     // 	change_pc(P);
     //     CallSubLevel--;
     // }
-    fn rtn(&mut self, memory: &mut MemoryBus) {
-        self.s = self.s.wrapping_add(1);
-        let hi = self.cpu_readmem(memory, self.s) as u16;
-        self.s = self.s.wrapping_add(1);
-        let lo = self.cpu_readmem(memory, self.s) as u16;
-        self.p = (hi << 8) | lo;
-        // change_pc(self.p); // Assuming this is handled elsewhere
+    fn rtn(&mut self) {
+        self.lh5801.s = self.lh5801.s.wrapping_add(1);
+        let hi = self.cpu_readmem(self.lh5801.s) as u16;
+        self.lh5801.s = self.lh5801.s.wrapping_add(1);
+        let lo = self.cpu_readmem(self.lh5801.s) as u16;
+        self.lh5801.p = (hi << 8) | lo;
+        // change_pc(self.lh5801.p); // Assuming this is handled elsewhere
         // CallSubLevel--; // Assuming this is handled elsewhere
     }
 
@@ -829,11 +835,11 @@ impl Lh5801 {
     // 	// flags
     // 	T = cpu_readmem(++S);
     // }
-    fn rti(&mut self, memory: &mut MemoryBus) {
-        self.rtn(memory);
+    fn rti(&mut self) {
+        self.rtn();
         // flags
-        self.s = self.s.wrapping_add(1);
-        self.t = self.cpu_readmem(memory, self.s);
+        self.lh5801.s = self.lh5801.s.wrapping_add(1);
+        self.lh5801.t = self.cpu_readmem(self.lh5801.s);
     }
 
     // INLINE void CLH5801::JMP(UINT32 adr)
@@ -842,7 +848,7 @@ impl Lh5801 {
     // 	change_pc(P);
     // }
     fn jmp(&mut self, addr: u16) {
-        self.p = addr;
+        self.lh5801.p = addr;
     }
 
     // INLINE void CLH5801::AddState(UINT8 n)
@@ -851,8 +857,8 @@ impl Lh5801 {
     //     ticks+=(n);
     // }
     fn add_state(&mut self, n: u8) {
-        self.timer_state += n as usize;
-        self.ticks += n as usize;
+        self.lh5801.timer_state += n as usize;
+        self.lh5801.ticks += n as usize;
     }
 
     // INLINE void CLH5801::BRANCH_PLUS(int doit)
@@ -864,12 +870,12 @@ impl Lh5801 {
     // 		change_pc(P);
     // 	}
     // }
-    fn branch_plus(&mut self, memory: &mut MemoryBus, doit: bool) {
-        let t = self.cpu_readop(memory, self.p);
-        self.p = self.p.wrapping_add(1);
+    fn branch_plus(&mut self, doit: bool) {
+        let t = self.cpu_readop(self.lh5801.p);
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
         if doit {
             self.add_state(2);
-            self.p = self.p.wrapping_add(u16::from(t));
+            self.lh5801.p = self.lh5801.p.wrapping_add(u16::from(t));
         }
     }
 
@@ -882,12 +888,12 @@ impl Lh5801 {
     // 		change_pc(P);
     // 	}
     // }
-    fn branch_minus(&mut self, memory: &mut MemoryBus, doit: bool) {
-        let t = self.cpu_readop(memory, self.p);
-        self.p = self.p.wrapping_add(1);
+    fn branch_minus(&mut self, doit: bool) {
+        let t = self.cpu_readop(self.lh5801.p);
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
         if doit {
             self.add_state(3);
-            self.p = self.p.wrapping_sub(u16::from(t));
+            self.lh5801.p = self.lh5801.p.wrapping_sub(u16::from(t));
         }
     }
 
@@ -903,15 +909,15 @@ impl Lh5801 {
     // 		change_pc(P);
     // 	}
     // }
-    fn lop(&mut self, memory: &mut MemoryBus) {
-        let t = self.cpu_readop(memory, self.p);
-        self.p = self.p.wrapping_add(1);
+    fn lop(&mut self) {
+        let t = self.cpu_readop(self.lh5801.p);
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
         self.add_state(8);
-        if self.ul() != 0 {
+        if self.lh5801.ul() != 0 {
             self.add_state(3);
-            self.p = self.p.wrapping_sub(u16::from(t));
+            self.lh5801.p = self.lh5801.p.wrapping_sub(u16::from(t));
         }
-        self.set_ul(self.ul().wrapping_sub(1));
+        self.lh5801.set_ul(self.lh5801.ul().wrapping_sub(1));
     }
 
     // INLINE void CLH5801::SJP(void)
@@ -922,10 +928,10 @@ impl Lh5801 {
     // 	change_pc(t);
     //     CallSubLevel++;
     // }
-    fn sjp(&mut self, memory: &mut MemoryBus) {
-        let t = self.readop_word(memory);
-        self.push_word(memory, self.p);
-        self.p = t;
+    fn sjp(&mut self) {
+        let t = self.readop_word();
+        self.push_word(self.lh5801.p);
+        self.lh5801.p = t;
         // change_pc(t); // Assuming this is handled elsewhere
         // CallSubLevel++; // Assuming this is handled elsewhere
     }
@@ -941,13 +947,13 @@ impl Lh5801 {
     // 	}
     // 	UNSET_Z;
     // }
-    fn vector(&mut self, memory: &mut MemoryBus, doit: bool, nr: u8) {
+    fn vector(&mut self, doit: bool, nr: u8) {
         if doit {
-            self.push_word(memory, self.p);
-            let hi = self.cpu_readmem(memory, 0xFF00 + u16::from(nr)) as u16;
-            let lo = self.cpu_readmem(memory, 0xFF00 + u16::from(nr) + 1) as u16;
-            self.p = (hi << 8) | lo;
-            // change_pc(self.p); // Assuming this is handled elsewhere
+            self.push_word(self.lh5801.p);
+            let hi = self.cpu_readmem(0xFF00 + u16::from(nr)) as u16;
+            let lo = self.cpu_readmem(0xFF00 + u16::from(nr) + 1) as u16;
+            self.lh5801.p = (hi << 8) | lo;
+            // change_pc(self.lh5801.p); // Assuming this is handled elsewhere
             self.add_state(21 - 8);
             // CallSubLevel++; // Assuming this is handled elsewhere
         }
@@ -960,8 +966,8 @@ impl Lh5801 {
     // 	lh5801.a = (l<<4) | (l>>4);
     // }
     fn aex(&mut self) {
-        let l = self.a;
-        self.a = (l << 4) | (l >> 4);
+        let l = self.lh5801.a;
+        self.lh5801.a = (l << 4) | (l >> 4);
     }
 
     // INLINE void CLH5801::DRL(UINT32 adr)
@@ -971,10 +977,10 @@ impl Lh5801 {
     // 	lh5801.a = l>>8;
     // 	cpu_writemem( adr , l>>4 );
     // }
-    fn drl<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) {
-        let l = u16::from(self.a) | (u16::from(self.cpu_readmem(memory, addr)) << 8);
-        self.a = (l >> 8) as u8;
-        self.cpu_writemem(memory, addr, (l >> 4) as u8);
+    fn drl<I: Into<u32> + Copy>(&mut self, addr: I) {
+        let l = u16::from(self.lh5801.a) | (u16::from(self.cpu_readmem(addr)) << 8);
+        self.lh5801.a = (l >> 8) as u8;
+        self.cpu_writemem(addr, (l >> 4) as u8);
     }
 
     // INLINE void CLH5801::DRR(UINT32 adr)
@@ -984,10 +990,10 @@ impl Lh5801 {
     // 	lh5801.a = (UINT8) l;
     // 	cpu_writemem(adr,l>>4);
     // }
-    fn drr<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) {
-        let l = u16::from(self.cpu_readmem(memory, addr)) | (u16::from(self.a) << 8);
-        self.a = (l & 0xFF) as u8;
-        self.cpu_writemem(memory, addr, (l >> 4) as u8);
+    fn drr<I: Into<u32> + Copy>(&mut self, addr: I) {
+        let l = u16::from(self.cpu_readmem(addr)) | (u16::from(self.lh5801.a) << 8);
+        self.lh5801.a = (l & 0xFF) as u8;
+        self.cpu_writemem(addr, (l >> 4) as u8);
     }
 
     // INLINE void CLH5801::ROL(void)
@@ -1003,12 +1009,12 @@ impl Lh5801 {
 
     // }
     fn rol(&mut self) {
-        let l = self.a;
-        self.a = (self.a << 1) | if self.get_carry_flag() { 1 } else { 0 };
+        let l = self.lh5801.a;
+        self.lh5801.a = (self.lh5801.a << 1) | if self.get_carry_flag() { 1 } else { 0 };
 
         self.check_c(l & 0x80);
-        self.check_z(self.a);
-        self.check_h(self.a & 0x10);
+        self.check_z(self.lh5801.a);
+        self.check_h(self.lh5801.a & 0x10);
         self.check_v((l >= 0x40) && (l < 0xc0));
     }
 
@@ -1024,15 +1030,17 @@ impl Lh5801 {
     // 	CHECK_V( ( (l&0x01)&&(lh5801.a&0x02) ) || ((l&0x02)&&(lh5801.a&0x01)));	// OK
     // }
     fn ror(&mut self) {
-        let l = self.a;
-        self.a = ((self.a as u16 | (if self.get_carry_flag() { 1 } else { 0 } << 8)) >> 1) as u8;
+        let l = self.lh5801.a;
+        self.lh5801.a =
+            ((self.lh5801.a as u16 | (if self.get_carry_flag() { 1 } else { 0 } << 8)) >> 1) as u8;
 
         // flags cvhz
         self.check_c(l & 0x01);
-        self.check_z(self.a);
-        self.check_h(self.a & 0x08);
+        self.check_z(self.lh5801.a);
+        self.check_h(self.lh5801.a & 0x08);
         self.check_v(
-            ((l & 0x01 != 0) && (self.a & 0x02 != 0)) || ((l & 0x02 != 0) && (self.a & 0x01 != 0)),
+            ((l & 0x01 != 0) && (self.lh5801.a & 0x02 != 0))
+                || ((l & 0x02 != 0) && (self.lh5801.a & 0x01 != 0)),
         );
     }
 
@@ -1047,11 +1055,11 @@ impl Lh5801 {
     // 	CHECK_V((l>=0x40)&&(l<0xc0));		// OK
     // }
     fn shl(&mut self) {
-        let l = self.a;
-        self.a <<= 1;
+        let l = self.lh5801.a;
+        self.lh5801.a <<= 1;
 
         self.check_c(l & 0x80);
-        self.check_z(self.a);
+        self.check_z(self.lh5801.a);
         self.check_h(l & 0x08);
         self.check_v((l >= 0x40) && (l < 0xc0));
     }
@@ -1067,14 +1075,15 @@ impl Lh5801 {
     // 	CHECK_V( ( (l&0x01)&&(lh5801.a&0x02) ) || ((l&0x02)&&(lh5801.a&0x01)));	// OK
     // }
     fn shr(&mut self) {
-        let l = self.a;
-        self.a >>= 1;
+        let l = self.lh5801.a;
+        self.lh5801.a >>= 1;
 
         self.check_c(l & 0x01);
-        self.check_z(self.a);
-        self.check_h(self.a & 0x08);
+        self.check_z(self.lh5801.a);
+        self.check_h(self.lh5801.a & 0x08);
         self.check_v(
-            ((l & 0x01 != 0) && (self.a & 0x02 != 0)) || ((l & 0x02 != 0) && (self.a & 0x01 != 0)),
+            ((l & 0x01 != 0) && (self.lh5801.a & 0x02 != 0))
+                || ((l & 0x02 != 0) && (self.lh5801.a & 0x01 != 0)),
         );
     }
 
@@ -1083,7 +1092,7 @@ impl Lh5801 {
     // 	lh5801.tm=value;
     // }
     fn am(&mut self, value: u16) {
-        self.tm = value;
+        self.lh5801.tm = value;
     }
 
     // INLINE void CLH5801::ITA(void)
@@ -1092,7 +1101,7 @@ impl Lh5801 {
     // 	CHECK_Z(lh5801.a);
     // }
     // FIXME: stub
-    fn ita(&mut self, memory: &mut MemoryBus) {}
+    fn ita(&mut self) {}
 
     // INLINE void CLH5801::instruction_fd(void)
     // {
@@ -1223,31 +1232,31 @@ impl Lh5801 {
     //                 break;
     // 	}
     // }
-    fn instruction_fd(&mut self, memory: &mut MemoryBus) {
-        let oper = self.cpu_readop(memory, self.p);
+    fn instruction_fd(&mut self) {
+        let oper = self.cpu_readop(self.lh5801.p);
 
         println!("fd instruction: {:02X}", oper);
-        self.p = self.p.wrapping_add(1);
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
 
         match oper {
             0x01 => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.sbc(read);
                 self.add_state(11);
             }
             0x03 => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.adc(read);
                 self.add_state(11);
             }
             0x05 => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.lda(read);
                 self.add_state(10);
             }
             0x07 => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
-                self.cpa(self.a, read);
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
+                self.cpa(self.lh5801.a, read);
                 self.add_state(11);
             }
             0x08 => {
@@ -1255,168 +1264,168 @@ impl Lh5801 {
                 self.add_state(11);
             }
             0x09 => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.and(read);
                 self.add_state(11);
             }
             0x0a => {
-                self.x = self.pop_word(memory);
+                self.lh5801.x = self.pop_word();
                 self.add_state(15);
             }
             0x0b => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.ora(read);
                 self.add_state(11);
             }
             0x0c => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.dcs(read);
                 self.add_state(17);
             }
             0x0d => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.eor(read);
                 self.add_state(11);
             }
             0x0e => {
-                self.cpu_writemem(memory, self.me1(self.x()), self.a);
+                self.cpu_writemem(self.me1(self.lh5801.x()), self.lh5801.a);
                 self.add_state(10);
             }
             0x0f => {
-                let data = self.cpu_readmem(memory, self.me1(self.x()));
-                self.bit(data, self.a);
+                let data = self.cpu_readmem(self.me1(self.lh5801.x()));
+                self.bit(data, self.lh5801.a);
                 self.add_state(11);
             }
             0x11 => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.sbc(read);
                 self.add_state(11);
             }
             0x13 => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.adc(read);
                 self.add_state(11);
             }
             0x15 => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.lda(read);
                 self.add_state(10);
             }
             0x17 => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
-                self.cpa(self.a, read);
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
+                self.cpa(self.lh5801.a, read);
                 self.add_state(11);
             }
             0x18 => {
-                self.x = self.y;
+                self.lh5801.x = self.lh5801.y;
                 self.add_state(11);
             }
             0x19 => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.and(read);
                 self.add_state(11);
             }
             0x1a => {
-                self.y = self.pop_word(memory);
+                self.lh5801.y = self.pop_word();
                 self.add_state(15);
             }
             0x1b => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.ora(read);
                 self.add_state(11);
             }
             0x1c => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.dcs(read);
                 self.add_state(17);
             }
             0x1d => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.eor(read);
                 self.add_state(11);
             }
             0x1e => {
-                self.cpu_writemem(memory, self.me1(self.y()), self.a);
+                self.cpu_writemem(self.me1(self.lh5801.y()), self.lh5801.a);
                 self.add_state(10);
             }
             0x1f => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
-                self.bit(read, self.a);
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
+                self.bit(read, self.lh5801.a);
                 self.add_state(11);
             }
             0x21 => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
                 self.sbc(read);
                 self.add_state(11);
             }
             0x23 => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
                 self.adc(read);
                 self.add_state(11);
             }
             0x25 => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
                 self.lda(read);
                 self.add_state(10);
             }
             0x27 => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
-                self.cpa(self.a, read);
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
+                self.cpa(self.lh5801.a, read);
                 self.add_state(11);
             }
             0x28 => {
-                self.x = self.u;
+                self.lh5801.x = self.lh5801.u;
                 self.add_state(11);
             }
             0x29 => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
                 self.and(read);
                 self.add_state(11);
             }
             0x2a => {
-                self.u = self.pop_word(memory);
+                self.lh5801.u = self.pop_word();
                 self.add_state(15);
             }
             0x2b => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
                 self.ora(read);
                 self.add_state(11);
             }
             0x2c => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
                 self.dcs(read);
                 self.add_state(17);
             }
             0x2d => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
                 self.eor(read);
                 self.add_state(11);
             }
             0x2e => {
-                self.cpu_writemem(memory, self.me1(self.u()), self.a);
+                self.cpu_writemem(self.me1(self.lh5801.u()), self.lh5801.a);
                 self.add_state(10);
             }
             0x2f => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
-                self.bit(read, self.a);
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
+                self.bit(read, self.lh5801.a);
                 self.add_state(11);
             }
             0x3a => {
-                self.s = self.s.wrapping_add(2);
+                self.lh5801.s = self.lh5801.s.wrapping_add(2);
                 self.add_state(15);
             }
             0x40 => {
-                let inc = self.inc(self.xh());
-                self.set_xh(inc);
+                let inc = self.inc(self.lh5801.xh());
+                self.lh5801.set_xh(inc);
                 self.add_state(9);
             }
             0x42 => {
-                let dec = self.dec(self.xh());
-                self.set_xh(dec);
+                let dec = self.dec(self.lh5801.xh());
+                self.lh5801.set_xh(dec);
                 self.add_state(9);
             }
             0x48 => {
-                self.x = self.s;
+                self.lh5801.x = self.lh5801.s;
                 self.add_state(11);
             }
             0x4a => {
@@ -1424,44 +1433,44 @@ impl Lh5801 {
                 self.add_state(11);
             }
             0x4b => {
-                let op = self.cpu_readop(memory, self.p);
-                self.ora_mem(memory, self.me1(self.x()), op);
-                self.p = self.p.wrapping_add(1);
+                let op = self.cpu_readop(self.lh5801.p);
+                self.ora_mem(self.me1(self.lh5801.x()), op);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(14);
             }
             0x4c => {
-                self.bf = false; // off ! LOOK
+                self.lh5801.bf = false; // off ! LOOK
                 self.add_state(8);
             }
             0x4d => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
-                let op = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
+                let op = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.bit(read, op);
                 self.add_state(14);
             }
             0x4e => {
-                self.s = self.x;
+                self.lh5801.s = self.lh5801.x;
                 self.add_state(11);
             }
             0x4f => {
-                let op = self.cpu_readop(memory, self.p);
-                self.add_mem(memory, self.me1(self.x()), op);
-                self.p = self.p.wrapping_add(1);
+                let op = self.cpu_readop(self.lh5801.p);
+                self.add_mem(self.me1(self.lh5801.x()), op);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(14);
             }
             0x50 => {
-                let inc = self.inc(self.yh());
-                self.set_yh(inc);
+                let inc = self.inc(self.lh5801.yh());
+                self.lh5801.set_yh(inc);
                 self.add_state(9);
             }
             0x52 => {
-                let dec = self.dec(self.yh());
-                self.set_yh(dec);
+                let dec = self.dec(self.lh5801.yh());
+                self.lh5801.set_yh(dec);
                 self.add_state(9);
             }
             0x58 => {
-                self.x = self.p;
+                self.lh5801.x = self.lh5801.p;
                 self.add_state(11);
             }
             0x5a => {
@@ -1469,36 +1478,36 @@ impl Lh5801 {
                 self.add_state(11);
             }
             0x5b => {
-                let op = self.cpu_readop(memory, self.p);
-                self.ora_mem(memory, self.me1(self.y()), op);
-                self.p = self.p.wrapping_add(1);
+                let op = self.cpu_readop(self.lh5801.p);
+                self.ora_mem(self.me1(self.lh5801.y()), op);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(14);
             }
             0x5d => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
-                let op = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
+                let op = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.bit(read, op);
                 self.add_state(14);
             }
             0x5e => {
-                self.jmp(self.x);
+                self.jmp(self.lh5801.x);
                 self.add_state(11);
             }
             0x5f => {
-                let op = self.cpu_readop(memory, self.p);
-                self.add_mem(memory, self.me1(self.y()), op);
-                self.p = self.p.wrapping_add(1);
+                let op = self.cpu_readop(self.lh5801.p);
+                self.add_mem(self.me1(self.lh5801.y()), op);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(14);
             }
             0x60 => {
-                let inc = self.inc(self.uh());
-                self.set_uh(inc);
+                let inc = self.inc(self.lh5801.uh());
+                self.lh5801.set_uh(inc);
                 self.add_state(9);
             }
             0x62 => {
-                let dec = self.dec(self.uh());
-                self.set_uh(dec);
+                let dec = self.dec(self.lh5801.uh());
+                self.lh5801.set_uh(dec);
                 self.add_state(9);
             }
             0x6a => {
@@ -1506,22 +1515,22 @@ impl Lh5801 {
                 self.add_state(11);
             }
             0x6b => {
-                let op = self.cpu_readop(memory, self.p);
-                self.ora_mem(memory, self.me1(self.u()), op);
-                self.p = self.p.wrapping_add(1);
+                let op = self.cpu_readop(self.lh5801.p);
+                self.ora_mem(self.me1(self.lh5801.u()), op);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(14);
             }
             0x6d => {
-                let read = self.cpu_readmem(memory, self.me1(self.u()));
-                let op = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let read = self.cpu_readmem(self.me1(self.lh5801.u()));
+                let op = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.bit(read, op);
                 self.add_state(14);
             }
             0x6f => {
-                let op = self.cpu_readop(memory, self.p);
-                self.add_mem(memory, self.me1(self.u()), op);
-                self.p = self.p.wrapping_add(1);
+                let op = self.cpu_readop(self.lh5801.p);
+                self.add_mem(self.me1(self.lh5801.u()), op);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(17);
             }
             0x81 => {
@@ -1529,106 +1538,106 @@ impl Lh5801 {
                 self.add_state(8);
             }
             0x88 => {
-                self.push_word(memory, self.x);
+                self.push_word(self.lh5801.x);
                 self.add_state(14);
             }
             0x8a => {
-                self.pop(memory);
+                self.pop();
                 self.add_state(12);
             }
             0x8c => {
-                let read = self.cpu_readmem(memory, self.me1(self.x()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.x()));
                 self.dca(read);
                 self.add_state(19);
             }
             // 0x8e => {} FIXME: clear internal divider
             0x98 => {
-                self.push_word(memory, self.y);
+                self.push_word(self.lh5801.y);
                 self.add_state(14);
             }
             0x9c => {
-                let read = self.cpu_readmem(memory, self.me1(self.y()));
+                let read = self.cpu_readmem(self.me1(self.lh5801.y()));
                 self.dca(read);
                 self.add_state(19);
             }
             0xa1 => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
                 self.sbc(read);
                 self.add_state(17);
             }
             0xa3 => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
                 self.adc(read);
                 self.add_state(17);
             }
             0xa5 => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
                 self.lda(read);
                 self.add_state(16);
             }
             0xa7 => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
-                self.cpa(self.a, read);
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
+                self.cpa(self.lh5801.a, read);
                 self.add_state(17);
             }
             0xa8 => {
-                self.push_word(memory, self.u);
+                self.push_word(self.lh5801.u);
                 self.add_state(14);
             }
             0xa9 => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
                 self.and(read);
                 self.add_state(17);
             }
             0xaa => {
-                self.lda(self.t);
-                self.check_z(self.t);
+                self.lda(self.lh5801.t);
+                self.check_z(self.lh5801.t);
                 self.add_state(9);
             }
             0xab => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
                 self.ora(read);
                 self.add_state(17);
             }
             0xac => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
                 self.dca(read);
                 self.add_state(17);
             }
             0xad => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
                 self.eor(read);
                 self.add_state(17);
             }
             0xae => {
-                let op = self.readop_word(memory);
-                self.cpu_writemem(memory, self.me1(op), self.a);
+                let op = self.readop_word();
+                self.cpu_writemem(self.me1(op), self.lh5801.a);
                 self.add_state(16);
             }
             0xaf => {
-                let op = self.readop_word(memory);
-                let read = self.cpu_readmem(memory, self.me1(op));
-                self.bit(read, self.a);
+                let op = self.readop_word();
+                let read = self.cpu_readmem(self.me1(op));
+                self.bit(read, self.lh5801.a);
                 self.add_state(17);
             }
             0xb1 => {
-                self.is_halted = false;
+                self.lh5801.is_halted = false;
                 self.add_state(8);
             }
             0xb8 => {
-                self.push_word(memory, (self.sh() as u16) << 8);
+                self.push_word((self.lh5801.sh() as u16) << 8);
                 self.add_state(14);
             }
             0xba => {
-                self.ita(memory);
+                self.ita();
                 self.add_state(9);
             }
             0xbe => {
@@ -1636,19 +1645,19 @@ impl Lh5801 {
                 self.add_state(8);
             }
             0xc0 => {
-                self.disp = false;
+                self.lh5801.disp = false;
                 self.add_state(8);
             }
             0xc1 => {
-                self.disp = true;
+                self.lh5801.disp = true;
                 self.add_state(8);
             }
             0xc8 => {
-                self.push(memory, self.a);
+                self.push(self.lh5801.a);
                 self.add_state(11);
             }
             0xca => {
-                self.x = self.adr(self.x);
+                self.lh5801.x = self.adr(self.lh5801.x);
                 self.add_state(11);
             }
             0xcc => {
@@ -1656,64 +1665,64 @@ impl Lh5801 {
                 self.add_state(9);
             }
             0xce => {
-                self.am(u16::from(self.a));
+                self.am(u16::from(self.lh5801.a));
                 self.add_state(9);
             }
             0xd3 => {
-                self.drr(memory, self.me1(self.x()));
+                self.drr(self.me1(self.lh5801.x()));
                 self.add_state(16);
             }
             0xd7 => {
-                self.drl(memory, self.me1(self.x()));
+                self.drl(self.me1(self.lh5801.x()));
                 self.add_state(16);
             }
             0xda => {
-                self.y = self.adr(self.y);
+                self.lh5801.y = self.adr(self.lh5801.y);
                 self.add_state(11);
             }
             0xde => {
-                self.am(u16::from(self.a) | 0x100);
+                self.am(u16::from(self.lh5801.a) | 0x100);
                 self.add_state(9);
             }
             0xea => {
-                self.u = self.adr(self.u);
+                self.lh5801.u = self.adr(self.lh5801.u);
                 self.add_state(11);
             }
             0xe9 => {
-                let op = self.readop_word(memory);
+                let op = self.readop_word();
                 let adr = self.me1(op);
-                let read = self.cpu_readop(memory, self.p);
-                self.and_mem(memory, adr, read);
-                self.p = self.p.wrapping_add(1);
+                let read = self.cpu_readop(self.lh5801.p);
+                self.and_mem(adr, read);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(23);
             }
             0xeb => {
-                let op = self.readop_word(memory);
+                let op = self.readop_word();
                 let adr = self.me1(op);
-                let read = self.cpu_readop(memory, self.p);
-                self.ora_mem(memory, adr, read);
-                self.p = self.p.wrapping_add(1);
+                let read = self.cpu_readop(self.lh5801.p);
+                self.ora_mem(adr, read);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(23);
             }
             0xec => {
-                self.t = self.a & 0x1F;
+                self.lh5801.t = self.lh5801.a & 0x1F;
                 self.add_state(9);
             }
             0xed => {
-                let op = self.readop_word(memory);
+                let op = self.readop_word();
                 let adr = self.me1(op);
-                let read = self.cpu_readmem(memory, adr);
-                let op2 = self.cpu_readop(memory, self.p);
+                let read = self.cpu_readmem(adr);
+                let op2 = self.cpu_readop(self.lh5801.p);
                 self.bit(read, op2);
-                self.p = self.p.wrapping_add(1);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(20);
             }
             0xef => {
-                let op = self.readop_word(memory);
+                let op = self.readop_word();
                 let adr = self.me1(op);
-                let op2 = self.cpu_readop(memory, self.p);
-                self.and_mem(memory, adr, op2);
-                self.p = self.p.wrapping_add(1);
+                let op2 = self.cpu_readop(self.lh5801.p);
+                self.and_mem(adr, op2);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.add_state(23);
             }
             _ => {
@@ -1949,232 +1958,232 @@ impl Lh5801 {
     // 	}
 
     // }
-    fn instruction(&mut self, memory: &mut MemoryBus) {
-        let oper = self.cpu_readop(memory, self.p);
+    fn instruction(&mut self) {
+        let oper = self.cpu_readop(self.lh5801.p);
 
         println!("instruction: {:02X}", oper);
-        self.p = self.p.wrapping_add(1);
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
 
         match oper {
             0x00 => {
-                self.sbc(self.xl());
+                self.sbc(self.lh5801.xl());
                 self.add_state(6);
             }
             0x01 => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.sbc(val);
                 self.add_state(7);
             }
             0x02 => {
-                self.adc(self.xl());
+                self.adc(self.lh5801.xl());
                 self.add_state(6);
             }
             0x03 => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.adc(val);
                 self.add_state(7);
             }
             0x04 => {
-                self.lda(self.xl());
+                self.lda(self.lh5801.xl());
                 self.add_state(5);
             }
             0x05 => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.lda(val);
                 self.add_state(6);
             }
             0x06 => {
-                self.cpa(self.a, self.xl());
+                self.cpa(self.lh5801.a, self.lh5801.xl());
                 self.add_state(6);
             }
             0x07 => {
-                let val = self.cpu_readmem(memory, self.x());
-                self.cpa(self.a, val);
+                let val = self.cpu_readmem(self.lh5801.x());
+                self.cpa(self.lh5801.a, val);
                 self.add_state(7);
             }
             0x08 => {
-                self.set_xh(self.a);
+                self.lh5801.set_xh(self.lh5801.a);
                 self.add_state(5);
             }
             0x09 => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.and(val);
                 self.add_state(7);
             }
             0x0a => {
-                self.set_xl(self.a);
+                self.lh5801.set_xl(self.lh5801.a);
                 self.add_state(5);
             }
             0x0b => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.ora(val);
                 self.add_state(7);
             }
             0x0c => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.dcs(val);
                 self.add_state(13);
             }
             0x0d => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.eor(val);
                 self.add_state(7);
             }
             0x0e => {
-                self.cpu_writemem(memory, self.x(), self.a);
+                self.cpu_writemem(self.lh5801.x(), self.lh5801.a);
                 self.add_state(6);
             }
             0x0f => {
-                let val = self.cpu_readmem(memory, self.x());
-                self.bit(val, self.a);
+                let val = self.cpu_readmem(self.lh5801.x());
+                self.bit(val, self.lh5801.a);
                 self.add_state(7);
             }
 
             0x10 => {
-                self.sbc(self.yl());
+                self.sbc(self.lh5801.yl());
                 self.add_state(6);
             }
             0x11 => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.sbc(val);
                 self.add_state(7);
             }
             0x12 => {
-                self.adc(self.yl());
+                self.adc(self.lh5801.yl());
                 self.add_state(6);
             }
             0x13 => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.adc(val);
                 self.add_state(7);
             }
             0x14 => {
-                self.lda(self.yl());
+                self.lda(self.lh5801.yl());
                 self.add_state(5);
             }
             0x15 => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.lda(val);
                 self.add_state(6);
             }
             0x16 => {
-                self.cpa(self.a, self.yl());
+                self.cpa(self.lh5801.a, self.lh5801.yl());
                 self.add_state(6);
             }
             0x17 => {
-                let val = self.cpu_readmem(memory, self.y());
-                self.cpa(self.a, val);
+                let val = self.cpu_readmem(self.lh5801.y());
+                self.cpa(self.lh5801.a, val);
                 self.add_state(7);
             }
             0x18 => {
-                self.set_yh(self.a);
+                self.lh5801.set_yh(self.lh5801.a);
                 self.add_state(5);
             }
             0x19 => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.and(val);
                 self.add_state(7);
             }
             0x1a => {
-                self.set_yl(self.a);
+                self.lh5801.set_yl(self.lh5801.a);
                 self.add_state(5);
             }
             0x1b => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.ora(val);
                 self.add_state(7);
             }
             0x1c => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.dcs(val);
                 self.add_state(13);
             }
             0x1d => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.eor(val);
                 self.add_state(7);
             }
             0x1e => {
-                self.cpu_writemem(memory, self.y(), self.a);
+                self.cpu_writemem(self.lh5801.y(), self.lh5801.a);
                 self.add_state(6);
             }
             0x1f => {
-                let val = self.cpu_readmem(memory, self.y());
-                self.bit(val, self.a);
+                let val = self.cpu_readmem(self.lh5801.y());
+                self.bit(val, self.lh5801.a);
                 self.add_state(7);
             }
 
             0x20 => {
-                self.sbc(self.ul());
+                self.sbc(self.lh5801.ul());
                 self.add_state(6);
             }
             0x21 => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.sbc(val);
                 self.add_state(7);
             }
             0x22 => {
-                self.adc(self.ul());
+                self.adc(self.lh5801.ul());
                 self.add_state(6);
             }
             0x23 => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.adc(val);
                 self.add_state(7);
             }
             0x24 => {
-                self.lda(self.ul());
+                self.lda(self.lh5801.ul());
                 self.add_state(5);
             }
             0x25 => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.lda(val);
                 self.add_state(6);
             }
             0x26 => {
-                self.cpa(self.a, self.ul());
+                self.cpa(self.lh5801.a, self.lh5801.ul());
                 self.add_state(6);
             }
             0x27 => {
-                let val = self.cpu_readmem(memory, self.u());
-                self.cpa(self.a, val);
+                let val = self.cpu_readmem(self.lh5801.u());
+                self.cpa(self.lh5801.a, val);
                 self.add_state(7);
             }
             0x28 => {
-                self.set_uh(self.a);
+                self.lh5801.set_uh(self.lh5801.a);
                 self.add_state(5);
             }
             0x29 => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.and(val);
                 self.add_state(7);
             }
             0x2a => {
-                self.set_ul(self.a);
+                self.lh5801.set_ul(self.lh5801.a);
                 self.add_state(5);
             }
             0x2b => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.ora(val);
                 self.add_state(7);
             }
             0x2c => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.dcs(val);
                 self.add_state(13);
             }
             0x2d => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.eor(val);
                 self.add_state(7);
             }
             0x2e => {
-                self.cpu_writemem(memory, self.u(), self.a);
+                self.cpu_writemem(self.lh5801.u(), self.lh5801.a);
                 self.add_state(6);
             }
             0x2f => {
-                let val = self.cpu_readmem(memory, self.u());
-                self.bit(val, self.a);
+                let val = self.cpu_readmem(self.lh5801.u());
+                self.bit(val, self.lh5801.a);
                 self.add_state(7);
             }
 
@@ -2191,7 +2200,7 @@ impl Lh5801 {
                 self.add_state(5);
             }
             0x36 => {
-                self.cpa(self.a, 0);
+                self.cpa(self.lh5801.a, 0);
                 self.add_state(6);
             }
             0x38 => {
@@ -2199,576 +2208,576 @@ impl Lh5801 {
             } // NOP
 
             0x40 => {
-                let inc = self.inc(self.xl());
-                self.set_xl(inc);
+                let inc = self.inc(self.lh5801.xl());
+                self.lh5801.set_xl(inc);
                 self.add_state(5);
             }
             0x41 => {
-                self.x = self.sin(memory, self.x);
+                self.lh5801.x = self.sin(self.lh5801.x);
                 self.add_state(6);
             }
             0x42 => {
-                let dec = self.dec(self.xl());
-                self.set_xl(dec);
+                let dec = self.dec(self.lh5801.xl());
+                self.lh5801.set_xl(dec);
                 self.add_state(5);
             }
             0x43 => {
-                self.x = self.sde(memory, self.x);
+                self.lh5801.x = self.sde(self.lh5801.x);
                 self.add_state(6);
             }
             0x44 => {
-                self.x = self.x.wrapping_add(1);
+                self.lh5801.x = self.lh5801.x.wrapping_add(1);
                 self.add_state(5);
             }
             0x45 => {
-                self.x = self.lin(memory, self.x);
+                self.lh5801.x = self.lin(self.lh5801.x);
                 self.add_state(6);
             }
             0x46 => {
-                self.x = self.x.wrapping_sub(1);
+                self.lh5801.x = self.lh5801.x.wrapping_sub(1);
                 self.add_state(5);
             }
             0x47 => {
-                self.x = self.lde(memory, self.x);
+                self.lh5801.x = self.lde(self.lh5801.x);
                 self.add_state(6);
             }
             0x48 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.set_xh(val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.lh5801.set_xh(val);
                 self.add_state(6);
             }
             0x49 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.and_mem(memory, self.x(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(self.lh5801.x(), val);
                 self.add_state(13);
             }
             0x4a => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.set_xl(val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.lh5801.set_xl(val);
                 self.add_state(6);
             }
             0x4b => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.ora_mem(memory, self.x(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.ora_mem(self.lh5801.x(), val);
                 self.add_state(13);
             }
             0x4c => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.cpa(self.xh(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.cpa(self.lh5801.xh(), val);
                 self.add_state(7);
             }
             0x4d => {
-                let mem = self.cpu_readmem(memory, self.x());
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let mem = self.cpu_readmem(self.lh5801.x());
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.bit(mem, val);
                 self.add_state(10);
             }
             0x4e => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.cpa(self.xl(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.cpa(self.lh5801.xl(), val);
                 self.add_state(7);
             }
             0x4f => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.add_mem(memory, self.x(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(self.lh5801.x(), val);
                 self.add_state(13);
             }
 
             0x50 => {
-                let inc = self.inc(self.yl());
-                self.set_yl(inc);
+                let inc = self.inc(self.lh5801.yl());
+                self.lh5801.set_yl(inc);
                 self.add_state(5);
             }
             0x51 => {
-                self.y = self.sin(memory, self.y);
+                self.lh5801.y = self.sin(self.lh5801.y);
                 self.add_state(6);
             }
             0x52 => {
-                let dec = self.dec(self.yl());
-                self.set_yl(dec);
+                let dec = self.dec(self.lh5801.yl());
+                self.lh5801.set_yl(dec);
                 self.add_state(5);
             }
             0x53 => {
-                self.y = self.sde(memory, self.y);
+                self.lh5801.y = self.sde(self.lh5801.y);
                 self.add_state(6);
             }
             0x54 => {
-                self.y = self.y.wrapping_add(1);
+                self.lh5801.y = self.lh5801.y.wrapping_add(1);
                 self.add_state(5);
             }
             0x55 => {
-                self.y = self.lin(memory, self.y);
+                self.lh5801.y = self.lin(self.lh5801.y);
                 self.add_state(6);
             }
             0x56 => {
-                self.y = self.y.wrapping_sub(1);
+                self.lh5801.y = self.lh5801.y.wrapping_sub(1);
                 self.add_state(5);
             }
             0x57 => {
-                self.y = self.lde(memory, self.y);
+                self.lh5801.y = self.lde(self.lh5801.y);
                 self.add_state(6);
             }
             0x58 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.set_yh(val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.lh5801.set_yh(val);
                 self.add_state(6);
             }
             0x59 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.and_mem(memory, self.y(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(self.lh5801.y(), val);
                 self.add_state(13);
             }
             0x5a => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.set_yl(val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.lh5801.set_yl(val);
                 self.add_state(6);
             }
             0x5b => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.ora_mem(memory, self.y(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.ora_mem(self.lh5801.y(), val);
                 self.add_state(13);
             }
             0x5c => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.cpa(self.yh(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.cpa(self.lh5801.yh(), val);
                 self.add_state(7);
             }
             0x5d => {
-                let mem = self.cpu_readmem(memory, self.y());
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let mem = self.cpu_readmem(self.lh5801.y());
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.bit(mem, val);
                 self.add_state(10);
             }
             0x5e => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.cpa(self.yl(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.cpa(self.lh5801.yl(), val);
                 self.add_state(7);
             }
             0x5f => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.add_mem(memory, self.y(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(self.lh5801.y(), val);
                 self.add_state(13);
             }
 
             0x60 => {
-                let inc = self.inc(self.ul());
-                self.set_ul(inc);
+                let inc = self.inc(self.lh5801.ul());
+                self.lh5801.set_ul(inc);
                 self.add_state(5);
             }
             0x61 => {
-                self.u = self.sin(memory, self.u);
+                self.lh5801.u = self.sin(self.lh5801.u);
                 self.add_state(6);
             }
             0x62 => {
-                let dec = self.dec(self.ul());
-                self.set_ul(dec);
+                let dec = self.dec(self.lh5801.ul());
+                self.lh5801.set_ul(dec);
                 self.add_state(5);
             }
             0x63 => {
-                self.u = self.sde(memory, self.u);
+                self.lh5801.u = self.sde(self.lh5801.u);
                 self.add_state(6);
             }
             0x64 => {
-                self.u = self.u.wrapping_add(1);
+                self.lh5801.u = self.lh5801.u.wrapping_add(1);
                 self.add_state(5);
             }
             0x65 => {
-                self.u = self.lin(memory, self.u);
+                self.lh5801.u = self.lin(self.lh5801.u);
                 self.add_state(6);
             }
             0x66 => {
-                self.u = self.u.wrapping_sub(1);
+                self.lh5801.u = self.lh5801.u.wrapping_sub(1);
                 self.add_state(5);
             }
             0x67 => {
-                self.u = self.lde(memory, self.u);
+                self.lh5801.u = self.lde(self.lh5801.u);
                 self.add_state(6);
             }
             0x68 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.set_uh(val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.lh5801.set_uh(val);
                 self.add_state(6);
             }
             0x69 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.and_mem(memory, self.u(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(self.lh5801.u(), val);
                 self.add_state(13);
             }
             0x6a => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.set_ul(val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.lh5801.set_ul(val);
                 self.add_state(6);
             }
             0x6b => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.ora_mem(memory, self.u(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.ora_mem(self.lh5801.u(), val);
                 self.add_state(13);
             }
             0x6c => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.cpa(self.uh(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.cpa(self.lh5801.uh(), val);
                 self.add_state(7);
             }
             0x6d => {
-                let mem = self.cpu_readmem(memory, self.u());
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let mem = self.cpu_readmem(self.lh5801.u());
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.bit(mem, val);
                 self.add_state(10);
             }
             0x6e => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.cpa(self.ul(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.cpa(self.lh5801.ul(), val);
                 self.add_state(7);
             }
             0x6f => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.add_mem(memory, self.u(), val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(self.lh5801.u(), val);
                 self.add_state(13);
             }
 
             0x80 => {
-                self.sbc(self.xh());
+                self.sbc(self.lh5801.xh());
                 self.add_state(6);
             }
             0x81 => {
-                self.branch_plus(memory, !self.get_carry_flag());
+                self.branch_plus(!self.get_carry_flag());
                 self.add_state(8);
             }
             0x82 => {
-                self.adc(self.xh());
+                self.adc(self.lh5801.xh());
                 self.add_state(6);
             }
             0x83 => {
-                self.branch_plus(memory, self.get_carry_flag());
+                self.branch_plus(self.get_carry_flag());
                 self.add_state(8);
             }
             0x84 => {
-                self.lda(self.xh());
+                self.lda(self.lh5801.xh());
                 self.add_state(5);
             }
             0x85 => {
-                self.branch_plus(memory, !self.get_half_carry_flag());
+                self.branch_plus(!self.get_half_carry_flag());
                 self.add_state(8);
             }
             0x86 => {
-                self.cpa(self.a, self.xh());
+                self.cpa(self.lh5801.a, self.lh5801.xh());
                 self.add_state(6);
             }
             0x87 => {
-                self.branch_plus(memory, self.get_half_carry_flag());
+                self.branch_plus(self.get_half_carry_flag());
                 self.add_state(8);
             }
             0x88 => {
-                self.lop(memory);
+                self.lop();
             }
             0x89 => {
-                self.branch_plus(memory, !self.get_zero_flag());
+                self.branch_plus(!self.get_zero_flag());
                 self.add_state(8);
             }
             0x8a => {
-                self.rti(memory);
+                self.rti();
                 self.add_state(14);
             }
             0x8b => {
-                self.branch_plus(memory, self.get_zero_flag());
+                self.branch_plus(self.get_zero_flag());
                 self.add_state(8);
             }
             0x8c => {
-                let val = self.cpu_readmem(memory, self.x());
+                let val = self.cpu_readmem(self.lh5801.x());
                 self.dca(val);
                 self.add_state(15);
             }
             0x8d => {
-                self.branch_plus(memory, !self.get_overflow_flag());
+                self.branch_plus(!self.get_overflow_flag());
                 self.add_state(8);
             }
             0x8e => {
-                self.branch_plus(memory, true);
+                self.branch_plus(true);
                 self.add_state(6);
             }
             0x8f => {
-                self.branch_plus(memory, self.get_overflow_flag());
+                self.branch_plus(self.get_overflow_flag());
                 self.add_state(8);
             }
 
             0x90 => {
-                self.sbc(self.yh());
+                self.sbc(self.lh5801.yh());
                 self.add_state(6);
             }
             0x91 => {
-                self.branch_minus(memory, !self.get_carry_flag());
+                self.branch_minus(!self.get_carry_flag());
                 self.add_state(8);
             }
             0x92 => {
-                self.adc(self.yh());
+                self.adc(self.lh5801.yh());
                 self.add_state(6);
             }
             0x93 => {
-                self.branch_minus(memory, self.get_carry_flag());
+                self.branch_minus(self.get_carry_flag());
                 self.add_state(8);
             }
             0x94 => {
-                self.lda(self.yh());
+                self.lda(self.lh5801.yh());
                 self.add_state(5);
             }
             0x95 => {
-                self.branch_minus(memory, !self.get_half_carry_flag());
+                self.branch_minus(!self.get_half_carry_flag());
                 self.add_state(8);
             }
             0x96 => {
-                self.cpa(self.a, self.yh());
+                self.cpa(self.lh5801.a, self.lh5801.yh());
                 self.add_state(6);
             }
             0x97 => {
-                self.branch_minus(memory, self.get_half_carry_flag());
+                self.branch_minus(self.get_half_carry_flag());
                 self.add_state(8);
             }
             0x99 => {
-                self.branch_minus(memory, !self.get_zero_flag());
+                self.branch_minus(!self.get_zero_flag());
                 self.add_state(8);
             }
             0x9a => {
-                self.rtn(memory);
+                self.rtn();
                 self.add_state(11);
             }
             0x9b => {
-                self.branch_minus(memory, self.get_zero_flag());
+                self.branch_minus(self.get_zero_flag());
                 self.add_state(8);
             }
             0x9c => {
-                let val = self.cpu_readmem(memory, self.y());
+                let val = self.cpu_readmem(self.lh5801.y());
                 self.dca(val);
                 self.add_state(15);
             }
             0x9d => {
-                self.branch_minus(memory, !self.get_overflow_flag());
+                self.branch_minus(!self.get_overflow_flag());
                 self.add_state(8);
             }
             0x9e => {
-                self.branch_minus(memory, true);
+                self.branch_minus(true);
                 self.add_state(6);
             }
             0x9f => {
-                self.branch_minus(memory, self.get_overflow_flag());
+                self.branch_minus(self.get_overflow_flag());
                 self.add_state(8);
             }
 
             0xa0 => {
-                self.sbc(self.uh());
+                self.sbc(self.lh5801.uh());
                 self.add_state(6);
             }
             0xa1 => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
                 self.sbc(val);
                 self.add_state(13);
             }
             0xa2 => {
-                self.adc(self.uh());
+                self.adc(self.lh5801.uh());
                 self.add_state(6);
             }
             0xa3 => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
                 self.adc(val);
                 self.add_state(13);
             }
             0xa4 => {
-                self.lda(self.uh());
+                self.lda(self.lh5801.uh());
                 self.add_state(5);
             }
             0xa5 => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
                 self.lda(val);
                 self.add_state(12);
             }
             0xa6 => {
-                self.cpa(self.a, self.uh());
+                self.cpa(self.lh5801.a, self.lh5801.uh());
                 self.add_state(6);
             }
             0xa7 => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
-                self.cpa(self.a, val);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
+                self.cpa(self.lh5801.a, val);
                 self.add_state(13);
             }
             0xa8 => {
-                self.pv = true;
+                self.lh5801.pv = true;
                 self.add_state(4);
             } // SPV
             0xa9 => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
                 self.and(val);
                 self.add_state(13);
             }
             0xaa => {
-                let addr = self.readop_word(memory);
-                self.s = addr;
+                let addr = self.readop_word();
+                self.lh5801.s = addr;
                 self.add_state(12);
             }
             0xab => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
                 self.ora(val);
                 self.add_state(13);
             }
             0xac => {
-                let val = self.cpu_readmem(memory, self.u());
+                let val = self.cpu_readmem(self.lh5801.u());
                 self.dca(val);
                 self.add_state(15);
             }
             0xad => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
                 self.eor(val);
                 self.add_state(13);
             }
             0xae => {
-                let addr = self.readop_word(memory);
-                self.cpu_writemem(memory, addr, self.a);
+                let addr = self.readop_word();
+                self.cpu_writemem(addr, self.lh5801.a);
                 self.add_state(12);
             }
             0xaf => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readmem(memory, addr);
-                self.bit(val, self.a);
+                let addr = self.readop_word();
+                let val = self.cpu_readmem(addr);
+                self.bit(val, self.lh5801.a);
                 self.add_state(13);
             }
 
             0xb1 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.sbc(val);
                 self.add_state(7);
             }
             0xb3 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.adc(val);
                 self.add_state(7);
             }
             0xb5 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.lda(val);
                 self.add_state(6);
             }
             0xb7 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.cpa(self.a, val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.cpa(self.lh5801.a, val);
                 self.add_state(7);
             }
             0xb8 => {
-                self.pv = false;
+                self.lh5801.pv = false;
                 self.add_state(4);
             } // RPV
             0xb9 => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.and(val);
                 self.add_state(7);
             }
             0xba => {
-                let addr = self.readop_word(memory);
+                let addr = self.readop_word();
                 self.jmp(addr);
                 self.add_state(12);
             }
             0xbb => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.ora(val);
                 self.add_state(7);
             }
             0xbd => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.eor(val);
                 self.add_state(7);
             }
             0xbe => {
-                self.sjp(memory);
+                self.sjp();
                 self.add_state(19);
             }
             0xbf => {
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.bit(self.a, val);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.bit(self.lh5801.a, val);
                 self.add_state(7);
             }
 
             0xc1 => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, !self.get_carry_flag(), nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(!self.get_carry_flag(), nr);
                 self.add_state(8);
             }
             0xc3 => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, self.get_carry_flag(), nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(self.get_carry_flag(), nr);
                 self.add_state(8);
             }
             0xc5 => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, !self.get_half_carry_flag(), nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(!self.get_half_carry_flag(), nr);
                 self.add_state(8);
             }
             0xc7 => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, self.get_half_carry_flag(), nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(self.get_half_carry_flag(), nr);
                 self.add_state(8);
             }
             0xc9 => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, !self.get_zero_flag(), nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(!self.get_zero_flag(), nr);
                 self.add_state(8);
             }
             0xcb => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, self.get_zero_flag(), nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(self.get_zero_flag(), nr);
                 self.add_state(8);
             }
             0xcd => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, true, nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(true, nr);
                 self.add_state(7);
             }
             0xcf => {
-                let nr = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.vector(memory, self.get_overflow_flag(), nr);
+                let nr = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.vector(self.get_overflow_flag(), nr);
                 self.add_state(8);
             }
 
@@ -2777,7 +2786,7 @@ impl Lh5801 {
                 self.add_state(9);
             }
             0xd3 => {
-                self.drr(memory, self.x());
+                self.drr(self.lh5801.x());
                 self.add_state(12);
             }
             0xd5 => {
@@ -2785,7 +2794,7 @@ impl Lh5801 {
                 self.add_state(9);
             }
             0xd7 => {
-                self.drl(memory, self.x());
+                self.drl(self.lh5801.x());
                 self.add_state(12);
             }
             0xd9 => {
@@ -2797,49 +2806,49 @@ impl Lh5801 {
                 self.add_state(8);
             }
             0xdd => {
-                self.a = self.inc(self.a);
+                self.lh5801.a = self.inc(self.lh5801.a);
                 self.add_state(5);
             }
             0xdf => {
-                self.a = self.dec(self.a);
+                self.lh5801.a = self.dec(self.lh5801.a);
                 self.add_state(5);
             }
 
             0xe1 => {
-                self.pu = true;
+                self.lh5801.pu = true;
                 self.add_state(4);
             } // SPU
             0xe3 => {
-                self.pu = false;
+                self.lh5801.pu = false;
                 self.add_state(4);
             } // RPU
             0xe9 => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.and_mem(memory, addr, val);
+                let addr = self.readop_word();
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.and_mem(addr, val);
                 self.add_state(19);
             }
             0xeb => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.ora_mem(memory, addr, val);
+                let addr = self.readop_word();
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.ora_mem(addr, val);
                 self.add_state(19);
             }
             0xed => {
-                let addr = self.readop_word(memory);
-                let mem = self.cpu_readmem(memory, addr);
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
+                let addr = self.readop_word();
+                let mem = self.cpu_readmem(addr);
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
                 self.bit(mem, val);
                 self.add_state(16);
             }
             0xef => {
-                let addr = self.readop_word(memory);
-                let val = self.cpu_readop(memory, self.p);
-                self.p = self.p.wrapping_add(1);
-                self.add_mem(memory, addr, val);
+                let addr = self.readop_word();
+                let val = self.cpu_readop(self.lh5801.p);
+                self.lh5801.p = self.lh5801.p.wrapping_add(1);
+                self.add_mem(addr, val);
                 self.add_state(19);
             }
 
@@ -2848,16 +2857,16 @@ impl Lh5801 {
                 self.add_state(6);
             }
             0xf5 => {
-                let val = self.cpu_readmem(memory, self.x);
-                self.cpu_writemem(memory, self.y, val);
-                self.x = self.x.wrapping_add(1);
-                self.y = self.y.wrapping_add(1);
+                let val = self.cpu_readmem(self.lh5801.x);
+                self.cpu_writemem(self.lh5801.y, val);
+                self.lh5801.x = self.lh5801.x.wrapping_add(1);
+                self.lh5801.y = self.lh5801.y.wrapping_add(1);
                 self.add_state(7);
             } // TIN
             0xf7 => {
-                let val = self.cpu_readmem(memory, self.x);
-                self.cpa(self.a, val);
-                self.x = self.x.wrapping_add(1);
+                let val = self.cpu_readmem(self.lh5801.x);
+                self.cpa(self.lh5801.a, val);
+                self.lh5801.x = self.lh5801.x.wrapping_add(1);
                 self.add_state(7);
             } // CIN
             0xf9 => {
@@ -2869,14 +2878,14 @@ impl Lh5801 {
                 self.add_state(4);
             }
             0xfd => {
-                self.instruction_fd(memory);
+                self.instruction_fd();
             }
 
             // Vector instructions with immediate operand
             0xc0 | 0xc2 | 0xc4 | 0xc6 | 0xc8 | 0xca | 0xcc | 0xce | 0xd0 | 0xd2 | 0xd4 | 0xd6
             | 0xd8 | 0xda | 0xdc | 0xde | 0xe0 | 0xe2 | 0xe4 | 0xe6 | 0xe8 | 0xea | 0xec | 0xee
             | 0xf0 | 0xf2 | 0xf4 | 0xf6 => {
-                self.vector(memory, true, oper);
+                self.vector(true, oper);
                 self.add_state(4);
             }
 
@@ -2885,7 +2894,7 @@ impl Lh5801 {
                 panic!(
                     "Illegal opcode: 0x{:02x} at PC: 0x{:04x}",
                     oper,
-                    self.p.wrapping_sub(1)
+                    self.lh5801.p.wrapping_sub(1)
                 );
             }
         }
