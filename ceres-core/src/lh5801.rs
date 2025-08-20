@@ -1235,7 +1235,7 @@ impl Pc1500 {
     fn instruction_fd(&mut self) {
         let oper = self.cpu_readop(self.lh5801.p);
 
-        println!("fd instruction: {:02X}", oper);
+        // println!("fd instruction: {:02X}", oper);
         self.lh5801.p = self.lh5801.p.wrapping_add(1);
 
         match oper {
@@ -1961,7 +1961,7 @@ impl Pc1500 {
     fn instruction(&mut self) {
         let oper = self.cpu_readop(self.lh5801.p);
 
-        println!("instruction: {:02X}", oper);
+        // println!("instruction: {:02X} at addr: {:04X}", oper, self.lh5801.p);
         self.lh5801.p = self.lh5801.p.wrapping_add(1);
 
         match oper {

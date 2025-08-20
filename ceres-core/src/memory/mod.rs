@@ -2,8 +2,12 @@ use crate::{Pc1500, lh5810};
 
 const PC1500_ROM_BYTES: &[u8] = include_bytes!("../../../pc1500-roms/bin/PC-1500_A04.ROM");
 
+const CE159_RAM_BEGIN: u32 = 0x2000;
+const CE159_RAM_END: u32 = 0x3FFF;
+const CE159_RAM_SIZE: usize = (CE159_RAM_END - CE159_RAM_BEGIN + 1) as usize;
+
 const STANDARD_USER_MEMORY_BEGIN: u32 = 0x4000;
-const STANDARD_USER_MEMORY_END: u32 = 0x47FF;
+const STANDARD_USER_MEMORY_END: u32 = 0x57FF;
 const STANDARD_USER_MEMORY_SIZE: usize =
     (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
@@ -18,6 +22,7 @@ const ROM_SIZE: usize = (ROM_END - ROM_BEGIN + 1) as usize;
 
 pub struct MemoryBus {
     pub rom: &'static [u8],
+    pub ce159_ram: [u8; CE159_RAM_SIZE],
     pub standard_user_memory: [u8; STANDARD_USER_MEMORY_SIZE],
     pub standard_user_system_memory: [u8; STANDARD_USER_SYSTEM_MEMORY_SIZE],
 }
@@ -30,6 +35,7 @@ impl MemoryBus {
             rom: PC1500_ROM_BYTES,
             standard_user_memory: [0xFF; STANDARD_USER_MEMORY_SIZE],
             standard_user_system_memory,
+            ce159_ram: [0xFF; CE159_RAM_SIZE],
         }
     }
 }
@@ -54,9 +60,25 @@ impl Pc1500 {
 
     //     return 0;
     // }
+    fn mirror_addresses(&self, addr: u32) -> u32 {
+        if addr >= 0x7000 && addr <= 0x75FF {
+            let addr = addr & 0x1FF;
+            return addr | 0x7600;
+        }
+
+        if addr >= 0x7C00 && addr <= 0x7FFF {
+            return addr - 0x400;
+        }
+        addr
+    }
 
     pub fn read_byte(&self, addr: u32) -> u8 {
+        let addr = self.mirror_addresses(addr);
+
         match addr {
+            CE159_RAM_BEGIN..=CE159_RAM_END => {
+                self.memory.ce159_ram[(addr - CE159_RAM_BEGIN) as usize]
+            }
             STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
                 self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize]
             }
@@ -87,7 +109,12 @@ impl Pc1500 {
     }
 
     pub fn write_byte(&mut self, addr: u32, value: u8) {
+        let addr = self.mirror_addresses(addr);
+
         match addr {
+            CE159_RAM_BEGIN..=CE159_RAM_END => {
+                self.memory.ce159_ram[(addr - CE159_RAM_BEGIN) as usize] = value;
+            }
             STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
                 self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] =
                     value;
