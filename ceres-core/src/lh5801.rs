@@ -8,36 +8,215 @@ const HF: u8 = 0x10; // H: Half carry flag
 
 #[derive(Debug, Default)]
 pub struct Lh5801Cpu {
-    pub a: u8,  // Accumulator
-    pub t: u8,  // T register (contains flags: C, IE, Z, V, H)
-    pub x: u16, // X index register
-    pub y: u16, // Y index register
-    pub u: u16, // U pointer register
-    pub s: u16, // Stack pointer
-    pub p: u16, // Program counter
+    a: u8,  // Accumulator
+    t: u8,  // T register (contains flags: C, IE, Z, V, H)
+    x: u16, // X index register
+    y: u16, // Y index register
+    u: u16, // U pointer register
+    s: u16, // Stack pointer
+    p: u16, // Program counter
 
     // CPU state
-    pub is_halted: bool,
+    is_halted: bool,
 
-    pub pu: bool,
-    pub pv: bool,
-    pub bf_flipflop: bool,
-    pub disp: bool,
-    pub tm: u16, // 9-bit timer register
+    pu: bool,
+    pv: bool,
+    bf: bool,
+    disp: bool,
+    tm: u16, // 9-bit timer register
 
-    pub ir0: bool, // Non-maskable interrupt (connected to ground in PC-1500)
-    pub ir1: bool, // Timer interrupt
-    pub ir2: bool, // Maskable interrupt
+    ir0: bool, // Non-maskable interrupt (connected to ground in PC-1500)
+    ir1: bool, // Timer interrupt
+    ir2: bool, // Maskable interrupt
+
+    reset_flag: bool,
+    is_timer_reached: bool,
+
+    timer_state: usize, // Timer tick counter
+    step_previous_state: usize,
 }
 
 impl Lh5801Cpu {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(memory: &mut MemoryBus) -> Self {
+        let mut ret = Self::default();
+        ret.internal_reset(memory);
+        ret
     }
 
-    pub fn reset(&mut self) {
-        // FIXME: very wrong, check C++
-        *self = Self::default();
+    // UINT32	CLH5801::get_mem(UINT32 adr,int size)
+    // {
+    // 	switch(size)
+    // 	{
+    //     case 8:
+    // 	case SIZE_8 :return( cpu_readmem(adr));
+    //     case 16:
+    //     case SIZE_16:return( cpu_readmem(adr+1)+(cpu_readmem(adr)<<8));
+    //     case 20:
+    //     case SIZE_20:return((cpu_readmem(adr+2)+(cpu_readmem(adr+1)<<8)+(cpu_readmem(adr)<<16))&MASK_20);
+    //     case 24:
+    //     case SIZE_24:return((cpu_readmem(adr+2)+(cpu_readmem(adr+1)<<8)+(cpu_readmem(adr)<<16))&MASK_24);
+    // 	}
+    // 	return(0);
+    // }
+    fn get_mem16(memory: &mut MemoryBus, addr: u16) -> u16 {
+        (memory.read_byte(addr.wrapping_add(1)) as u16) | ((memory.read_byte(addr) as u16) << 8)
+    }
+
+    // void CLH5801::Reset(void)
+    // {
+    //     resetFlag = true;
+    // }
+    fn reset(&mut self) {
+        self.reset_flag = true;
+    }
+
+    // void CLH5801::internalReset(void)
+    // {
+    //     resetFlag = true;
+    //     memset(imem,0,imemsize);
+    //     P	= (UINT16) get_mem(0xFFFE,SIZE_16);
+    //     lh5801.HLT=lh5801.IR0=lh5801.IR1=lh5801.IR2=0;
+    //     S	= 0;
+    //     U	= 0;
+    //     UL	= 0;
+    //     UH	= 0;
+    //     X	= 0;
+    //     XL	= 0;
+    //     XH	= 0;
+    //     Y	= 0;
+    //     YL	= 0;
+    //     YH	= 0;
+    //     lh5801.tm=0; //9 bit
+    //     lh5801.t=lh5801.a=lh5801.dp=lh5801.pu=lh5801.pv=0;
+    //     lh5801.bf=1;
+    //     CallSubLevel = 0;
+
+    //     resetFlag = false;
+    // }
+    // FIXME: wrong
+    fn internal_reset(&mut self, memory: &mut MemoryBus) {
+        self.reset_flag = true;
+        self.p = Self::get_mem16(memory, 0xFFFE);
+        self.a = 0;
+        self.t = 0;
+        self.x = 0;
+        self.y = 0;
+        self.u = 0;
+        self.s = 0;
+        self.p = 0;
+        self.is_halted = false;
+        self.ir0 = false;
+        self.ir1 = false;
+        self.ir2 = false;
+        self.timer_state = 0;
+        self.bf = true;
+
+        self.reset_flag = false;
+    }
+
+    // void CLH5801::step(void)
+    // {
+
+    //     quint64	Current_State;
+
+    //     if (resetFlag) internalReset();
+
+    //     if (Is_Timer_Reached) { lh5801.IR1=1; Is_Timer_Reached = false; }
+
+    // 	if (lh5801.IR0)
+    // 	{
+    // 		// Non-maskable Interrupt processing
+    // 		// NOT USED - Connected to Ground
+    // 	}
+    // 	else
+    // 	if ( (lh5801.IR1) && F_IE )
+    // 	{
+    // 		// Timer Interrupt Routine
+    // 		PUSH(lh5801.t);
+    // 		UNSET_IE;
+    // 		lh5801.IR1=0;
+    // 		PUSH_WORD(P);
+    // 		P = (UINT16) get_mem(0xFFFA,SIZE_16);
+    //         CallSubLevel++;
+
+    // 	}
+    // 	else
+    // 	if ( (lh5801.IR2) && F_IE )
+    // 	{
+
+    // 		// Maskable Interrupt processing
+    // 		PUSH(lh5801.t);
+    // 		UNSET_IE;
+    //         lh5801.HLT = false;
+    // 		lh5801.IR2=0;
+    // 		PUSH_WORD(P);
+    // 		P = (UINT16) get_mem(0xFFF8,SIZE_16);
+    //         CallSubLevel++;
+
+    // 	}
+    // 	else
+    // 	if (lh5801.HLT)
+    // 	{
+    // 		// Do nothing
+    //         AddState(2);
+    // 	}
+    // 	else
+    // 	{
+    // 		instruction();
+    // 	}
+
+    // #define TIMER_FREQUENCY 31250
+    // #define NB_STATE_PER_TIMER	42
+
+    // 	// INCREMENT TIMER
+    // 	Current_State = pPC->pTIMER->state;
+
+    // 	if ((Current_State - step_Previous_State) >= 42)
+    // 	{
+    // 		TIMER_INC();
+    // 		step_Previous_State += (Current_State - step_Previous_State);
+    // 	}
+
+    // }
+    pub fn step(&mut self, memory: &mut MemoryBus) {
+        if self.reset_flag {
+            self.internal_reset(memory);
+        }
+
+        if self.is_timer_reached {
+            self.ir1 = true; // Timer interrupt
+            self.is_timer_reached = false;
+        }
+
+        if self.ir0 {
+            // Non-maskable Interrupt processing
+            // NOT USED - Connected to Ground
+        } else if self.ir1 && self.interrupt_enabled() {
+            self.push(memory, self.t);
+            self.set_flag(IE, false); // Unset interrupt enable flag
+            self.ir1 = false;
+            self.push_word(memory, self.p);
+            self.p = Self::get_mem16(memory, 0xFFFA);
+        } else if self.ir2 && self.interrupt_enabled() {
+            // Maskable Interrupt processing
+            self.push(memory, self.t);
+            self.set_flag(IE, false); // Unset interrupt enable flag
+            self.ir2 = false;
+            self.push_word(memory, self.p);
+            self.p = Self::get_mem16(memory, 0xFFF8);
+        } else if self.is_halted {
+            // Do nothing
+            self.add_state(2);
+        } else {
+            self.instruction(memory);
+        }
+
+        let current_state = self.timer_state;
+
+        if current_state - self.step_previous_state >= 42 {
+            self.timer_inc();
+            self.step_previous_state += current_state - self.step_previous_state;
+        }
     }
 
     #[must_use]
@@ -259,6 +438,19 @@ impl Lh5801Cpu {
 
     fn check_v<I: Into<i16>>(&mut self, val: I) {
         self.set_overflow_flag(val.into() != 0);
+    }
+
+    // INLINE void CLH5801::TIMER_INC(void)
+    // {
+    // 	// Shift right , b9=(b0 xor b4)
+    // 	lh5801.tm = (lh5801.tm >> 1) | (( (lh5801.tm & 0x01) ^ ((lh5801.tm & 0x10)>>4) )<<8 );
+
+    //     Is_Timer_Reached=(lh5801.tm == 0x1FF ? true : false);
+    // }
+    fn timer_inc(&mut self) {
+        // Shift right , b9=(b0 xor b4)
+        self.tm = (self.tm >> 1) | (((self.tm & 0x01) ^ ((self.tm & 0x10) >> 4)) << 8);
+        self.is_timer_reached = self.tm == 0x1FF;
     }
 
     // INLINE void CLH5801::PUSH(UINT8 data)
@@ -643,8 +835,9 @@ impl Lh5801Cpu {
     // 	pPC->pTIMER->state+=(n);
     //     ticks+=(n);
     // }
-    // FIXME: stub
-    fn add_state(&mut self, n: u8) {}
+    fn add_state(&mut self, n: u8) {
+        self.timer_state += n as usize;
+    }
 
     // INLINE void CLH5801::BRANCH_PLUS(int doit)
     // {
