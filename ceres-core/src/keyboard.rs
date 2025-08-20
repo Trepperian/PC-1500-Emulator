@@ -1,18 +1,3 @@
-use crate::interrupts::InterruptController;
-
-/// PC-1500 Keyboard Controller
-///
-/// This module handles the keyboard matrix of the PC-1500, which is connected
-/// to the LH5801 CPU through pins IN0-IN7 (pins 66-73 on the microprocessor).
-///
-/// The ITA (In To Accumulator) instruction reads these pins and transfers
-/// the keyboard state to the CPU's accumulator register.
-///
-/// Key Code Matrix:
-/// - The PC-1500 uses a 6x16 matrix (columns 0-5, rows 0-F)
-/// - Each key has a unique code based on its row/column position
-/// - The hardware uses active-low logic (pressed = 0, not pressed = 1)
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     // Row 0 (0x00-0x05)
@@ -138,14 +123,11 @@ impl Keyboard {
     }
 
     /// Press a key on the PC-1500 keyboard
-    pub fn press(&mut self, key: Key, ints: &mut InterruptController) {
+    pub fn press(&mut self, key: Key) {
         let key_code = key as u8;
         let bit_pos = key_code & 0x3F; // Use lower 6 bits for bit position (0-63)
 
         self.pressed_keys |= 1u64 << bit_pos;
-
-        // Request interrupt for keyboard input (maps to maskable interrupt)
-        ints.request_p1(); // Uses maskable interrupt for PC-1500 keyboard input
     }
 
     /// Release a key on the PC-1500 keyboard

@@ -34,9 +34,18 @@ pub struct Lh5801Cpu {
 
     timer_state: usize, // Timer tick counter
     step_previous_state: usize,
+    ticks: usize,
 }
 
 impl Lh5801Cpu {
+    pub fn get_ticks(&self) -> usize {
+        self.ticks
+    }
+
+    pub fn set_ticks(&mut self, ticks: usize) {
+        self.ticks = ticks;
+    }
+
     pub fn new(memory: &mut MemoryBus) -> Self {
         let mut ret = Self::default();
         ret.internal_reset(memory);
@@ -58,8 +67,10 @@ impl Lh5801Cpu {
     // 	}
     // 	return(0);
     // }
-    fn get_mem16(memory: &mut MemoryBus, addr: u16) -> u16 {
-        (memory.read_byte(addr.wrapping_add(1)) as u16) | ((memory.read_byte(addr) as u16) << 8)
+    // TODO: unnafected by PV and PU?
+    fn get_mem16(memory: &mut MemoryBus, addr: u32) -> u16 {
+        (memory.read_byte(addr.wrapping_add(1), false, false) as u16)
+            | ((memory.read_byte(addr, false, false) as u16) << 8)
     }
 
     // void CLH5801::Reset(void)
@@ -97,13 +108,15 @@ impl Lh5801Cpu {
     fn internal_reset(&mut self, memory: &mut MemoryBus) {
         self.reset_flag = true;
         self.p = Self::get_mem16(memory, 0xFFFE);
+
+        println!("Resetting CPU, PC set to {:04X}", self.p);
+
         self.a = 0;
         self.t = 0;
         self.x = 0;
         self.y = 0;
         self.u = 0;
         self.s = 0;
-        self.p = 0;
         self.is_halted = false;
         self.ir0 = false;
         self.ir1 = false;
@@ -339,20 +352,20 @@ impl Lh5801Cpu {
         self.u = (self.u & 0x00FF) | (u16::from(val) << 8);
     }
 
-    fn cpu_readmem(&mut self, memory: &mut MemoryBus, addr: u16) -> u8 {
-        memory.read_byte(addr)
+    fn cpu_readmem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) -> u8 {
+        memory.read_byte(addr.into(), self.pv, self.pu)
     }
 
-    fn cpu_writemem(&mut self, memory: &mut MemoryBus, addr: u16, val: u8) {
-        memory.write_byte(addr, val);
+    fn cpu_writemem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, val: u8) {
+        memory.write_byte(addr.into(), self.pv, self.pu, val);
     }
 
     // INLINE UINT8 CLH5801::cpu_readop(UINT32 adr)
     // {
     //     return (pPC->Get_8(adr));
     // }
-    fn cpu_readop(&mut self, memory: &mut MemoryBus, addr: u16) -> u8 {
-        memory.read_byte(addr)
+    fn cpu_readop<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) -> u8 {
+        memory.read_byte(addr.into(), self.pv, self.pu)
     }
 
     // INLINE UINT16 CLH5801::readop_word(void)
@@ -370,8 +383,8 @@ impl Lh5801Cpu {
 
     // #define ME1(a)		((a)|0x10000)
 
-    const fn me1(&self, addr: u16) -> u16 {
-        addr | 0x10000
+    fn me1<I: Into<u32> + Copy>(&self, addr: I) -> u32 {
+        addr.into() | 0x10000
     }
 
     // === FLAG OPERATIONS ===
@@ -563,7 +576,7 @@ impl Lh5801Cpu {
     // 	cpu_writemem(addr,v);
     // }
 
-    fn add_mem(&mut self, memory: &mut MemoryBus, addr: u16, data: u8) {
+    fn add_mem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, data: u8) {
         let mem_read = self.cpu_readmem(memory, addr);
         let v = self.add_generic(mem_read, data, false);
         self.cpu_writemem(memory, addr, v);
@@ -669,7 +682,7 @@ impl Lh5801Cpu {
     // 	cpu_writemem(addr,data);
     // }
 
-    fn and_mem(&mut self, memory: &mut MemoryBus, addr: u16, data: u8) {
+    fn and_mem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, data: u8) {
         let data = data & self.cpu_readmem(memory, addr);
         self.check_z(data);
         self.cpu_writemem(memory, addr, data);
@@ -709,7 +722,7 @@ impl Lh5801Cpu {
     // 	CHECK_Z(data);
     // 	cpu_writemem(addr,data);
     // }
-    fn ora_mem(&mut self, memory: &mut MemoryBus, addr: u16, mut data: u8) {
+    fn ora_mem<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I, mut data: u8) {
         data |= self.cpu_readmem(memory, addr);
         self.check_z(data);
         self.cpu_writemem(memory, addr, data);
@@ -837,6 +850,7 @@ impl Lh5801Cpu {
     // }
     fn add_state(&mut self, n: u8) {
         self.timer_state += n as usize;
+        self.ticks += n as usize;
     }
 
     // INLINE void CLH5801::BRANCH_PLUS(int doit)
@@ -955,7 +969,7 @@ impl Lh5801Cpu {
     // 	lh5801.a = l>>8;
     // 	cpu_writemem( adr , l>>4 );
     // }
-    fn drl(&mut self, memory: &mut MemoryBus, addr: u16) {
+    fn drl<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) {
         let l = u16::from(self.a) | (u16::from(self.cpu_readmem(memory, addr)) << 8);
         self.a = (l >> 8) as u8;
         self.cpu_writemem(memory, addr, (l >> 4) as u8);
@@ -968,7 +982,7 @@ impl Lh5801Cpu {
     // 	lh5801.a = (UINT8) l;
     // 	cpu_writemem(adr,l>>4);
     // }
-    fn drr(&mut self, memory: &mut MemoryBus, addr: u16) {
+    fn drr<I: Into<u32> + Copy>(&mut self, memory: &mut MemoryBus, addr: I) {
         let l = u16::from(self.cpu_readmem(memory, addr)) | (u16::from(self.a) << 8);
         self.a = (l & 0xFF) as u8;
         self.cpu_writemem(memory, addr, (l >> 4) as u8);

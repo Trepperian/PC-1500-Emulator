@@ -1,5 +1,5 @@
-use ceres_core::joypad::Key as Pc1500Key;
-use ceres_core::{Model, Pc1500};
+use ceres_core::Pc1500;
+use ceres_core::keyboard::Key as Pc1500Key;
 use eframe::egui;
 use std::collections::HashSet;
 
@@ -20,13 +20,6 @@ pub struct Pc1500App {
     show_rom_controls: bool,
     debug_mode: bool,
 
-    // MEMORY TOOLS - Complete memory editing
-    show_memory_map: bool,
-
-    // ROM MODE - Full ROM support
-    rom_mode_active: bool,
-    cpu_cycles: u64,
-
     // DISPLAY - Full display system
     display_buffer: Vec<u8>,
     display_width: usize,
@@ -43,11 +36,7 @@ pub struct Pc1500App {
 
 impl Pc1500App {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let mut emulator = Pc1500::new(Model::default());
-
-        // Initialize in test mode by default
-        emulator.init_test_mode();
-        emulator.display_message("PC-1500 READY");
+        let emulator = Pc1500::new();
 
         Self {
             emulator,
@@ -60,9 +49,6 @@ impl Pc1500App {
             show_cpu_info: false,
             show_rom_controls: true,
             debug_mode: false,
-            show_memory_map: false,
-            rom_mode_active: false,
-            cpu_cycles: 0,
             display_buffer: vec![0; 156 * 7 * 4], // RGBA buffer
             display_width: 156,
             display_height: 7,
@@ -154,9 +140,6 @@ impl Pc1500App {
         self.emulator.step_frame();
         self.frame_count += 1;
 
-        // Update ROM mode status
-        self.rom_mode_active = self.emulator.is_rom_mode();
-
         // Update display buffer
         let pixel_data = self.emulator.display().rgba_buffer();
         self.display_buffer.copy_from_slice(pixel_data);
@@ -164,34 +147,6 @@ impl Pc1500App {
 
     fn render_menu_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Load ROM...").clicked() {
-                    self.load_rom_dialog();
-                }
-                ui.separator();
-                if ui.button("Reset System").clicked() {
-                    self.reset_system();
-                }
-                ui.separator();
-                if ui.button("Exit").clicked() {
-                    std::process::exit(0);
-                }
-            });
-
-            ui.menu_button("System", |ui| {
-                if ui.button("Toggle Test/ROM Mode").clicked() {
-                    if self.rom_mode_active {
-                        self.emulator.init_test_mode();
-                        self.emulator.display_message("TEST MODE");
-                    } else {
-                        // Try to load ROM
-                        self.try_load_default_rom();
-                    }
-                }
-                ui.separator();
-                ui.checkbox(&mut self.rom_mode_active, "ROM Mode Active");
-            });
-
             ui.menu_button("View", |ui| {
                 ui.checkbox(&mut self.show_keyboard, "PC-1500 Keyboard");
                 ui.checkbox(&mut self.show_memory_editor, "Memory Editor");
@@ -201,44 +156,12 @@ impl Pc1500App {
                 ui.separator();
                 ui.checkbox(&mut self.debug_mode, "Debug Mode");
             });
-
-            ui.menu_button("Tools", |ui| {
-                if ui.button("Clear Display").clicked() {
-                    self.clear_display();
-                }
-                if ui.button("Test Pattern").clicked() {
-                    self.show_test_pattern();
-                }
-                if ui.button("Memory Map").clicked() {
-                    self.show_memory_map = !self.show_memory_map;
-                }
-                ui.separator();
-                if ui.button("Test PC-1500 Display System").clicked() {
-                    self.test_pc1500_display_system();
-                }
-                if ui.button("Show System Information").clicked() {
-                    self.show_system_info();
-                }
-            });
         });
     }
 
     fn render_main_display(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.label("PC-1500 Display (156×7 pixels)");
-
-            // ROM mode indicator
-            if self.rom_mode_active {
-                ui.colored_label(
-                    egui::Color32::GREEN,
-                    "🟢 ROM MODE - Authentic PC-1500 firmware executing",
-                );
-            } else {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "🟡 TEST MODE - Manual control available",
-                );
-            }
 
             // Display the actual screen
             let display_size = egui::Vec2::new(
@@ -411,134 +334,6 @@ impl Pc1500App {
         });
     }
 
-    fn render_cpu_info(&mut self, ctx: &egui::Context) {
-        if !self.show_cpu_info {
-            return;
-        }
-
-        egui::Window::new("CPU Information")
-            .open(&mut self.show_cpu_info)
-            .show(ctx, |ui| {
-                let cpu_state = self.emulator.cpu_state();
-
-                ui.label("LH5801 CPU State:");
-                ui.monospace(format!("PC: 0x{:04X}", cpu_state.pc));
-                ui.monospace(format!("A:  0x{:02X}", cpu_state.a));
-                ui.monospace(format!("X:  0x{:04X}", cpu_state.x));
-                ui.monospace(format!("Y:  0x{:04X}", cpu_state.y));
-                ui.monospace(format!("U:  0x{:04X}", cpu_state.u));
-                ui.monospace(format!("S:  0x{:04X}", cpu_state.s));
-
-                ui.separator();
-
-                if self.rom_mode_active {
-                    ui.colored_label(egui::Color32::GREEN, "ROM MODE ACTIVE");
-                    ui.label("✅ Authentic PC-1500 firmware executing");
-                    ui.label("📊 Real-time CPU state from ROM execution");
-                } else {
-                    ui.colored_label(egui::Color32::YELLOW, "TEST MODE");
-                    ui.label("🧪 Test program loaded");
-                    ui.label("🔧 Manual control available");
-                }
-
-                ui.separator();
-                ui.label(format!("Frame: {}", self.frame_count));
-                ui.label(format!("Cycles: {}", self.cpu_cycles));
-            });
-    }
-
-    fn render_memory_map_window(&mut self, ctx: &egui::Context) {
-        if !self.show_memory_map {
-            return;
-        }
-
-        egui::Window::new("PC-1500 Memory Map")
-            .open(&mut self.show_memory_map)
-            .default_width(600.0)
-            .default_height(400.0)
-            .show(ctx, |ui| {
-                ui.label("PC-1500 Memory Layout:");
-                ui.separator();
-
-                // ROM/System Memory
-                ui.label("📖 ROM & SYSTEM MEMORY:");
-                ui.monospace("0x0000-0x3FFF: ROM Area (16KB) - PC-1500_A04.ROM");
-                if self.rom_mode_active {
-                    ui.colored_label(egui::Color32::GREEN, "  ✅ ROM loaded and active");
-                    ui.monospace("  PC-1500_A04.ROM executing authentic firmware");
-                } else {
-                    ui.colored_label(egui::Color32::YELLOW, "  🧪 Test program loaded");
-                    ui.monospace("  Simple test program for basic functionality");
-                }
-
-                ui.add_space(10.0);
-
-                // RAM Memory
-                ui.label("💾 RAM MEMORY:");
-                ui.monospace("0x8000-0x9FFF: RAM Area (8KB)");
-                ui.monospace("  Variables, programs, and user data");
-
-                ui.add_space(10.0);
-
-                // Display Memory (most important for PC-1500)
-                ui.label("📺 DISPLAY MEMORY:");
-                ui.monospace("0x7600-0x764F: First section (80 bytes, columns 0-79)");
-                ui.monospace("0x7700-0x774F: Second section (80 bytes, columns 80-159)");
-                ui.monospace("Total: 160 bytes for 156x7 pixel display");
-
-                ui.add_space(5.0);
-                ui.label("Display format:");
-                ui.monospace("  Each byte = 7 dots (bits 0-6)");
-                ui.monospace("  Bits 0,1,2,3: 4 DOTS (upper section)");
-                ui.monospace("  Bits 4,5,6:   3 DOTS (lower section)");
-                ui.monospace("  Bit 7:       Ignored by display");
-
-                ui.separator();
-
-                // Current CPU State
-                if self.rom_mode_active {
-                    let cpu_state = self.emulator.cpu_state();
-                    ui.label("💻 CURRENT CPU STATE:");
-                    ui.monospace(format!("PC: 0x{:04X} (Program Counter)", cpu_state.pc));
-                    ui.monospace(format!("A:  0x{:02X}   (Accumulator)", cpu_state.a));
-                    ui.monospace(format!("X:  0x{:04X} (Index Register X)", cpu_state.x));
-                    ui.monospace(format!("Y:  0x{:04X} (Index Register Y)", cpu_state.y));
-                    ui.monospace(format!("U:  0x{:04X} (User Stack)", cpu_state.u));
-                    ui.monospace(format!("S:  0x{:04X} (System Stack)", cpu_state.s));
-                } else {
-                    ui.label("💻 CPU STATE: Test Mode - Limited functionality");
-                }
-
-                ui.separator();
-
-                // Display Memory Sample
-                ui.label("🔍 DISPLAY MEMORY SAMPLE (First 16 bytes):");
-                ui.monospace("Addr  | Hex | Binary   | 4-DOTS | 3-DOTS | Visual");
-                for i in 0..16 {
-                    let addr = 0x7600 + i;
-                    let value = self.emulator.read_memory(addr);
-                    let first_char = value & 0x0F; // bits 0,1,2,3
-                    let second_char = (value >> 4) & 0x07; // bits 4,5,6
-
-                    // Visual representation
-                    let mut visual = String::new();
-                    for bit in 0..7 {
-                        visual.push(if (value >> bit) & 1 != 0 { '█' } else { '·' });
-                    }
-
-                    ui.monospace(format!(
-                        "0x{:04X}|  {:02X} | {:08b} |   0x{:X}  |   0x{:X}  | {}",
-                        addr, value, value, first_char, second_char, visual
-                    ));
-                }
-
-                if ui.button("🔄 Refresh Memory View").clicked() {
-                    // Force refresh of the display
-                }
-            });
-    }
-
-    // Key handling functions - COMPLETE RESTORATION WITH TIMING
     fn send_key_press(&mut self, key: Pc1500Key) {
         // Add key to pressed set for visual feedback
         self.pressed_keys.insert(key);
@@ -547,7 +342,7 @@ impl Pc1500App {
         self.key_press_timers.insert(key, std::time::Instant::now());
 
         // Send key press to emulator
-        self.emulator.press_key(key as u32);
+        self.emulator.press(key);
 
         // Log key press for debugging
         self.key_press_log
@@ -563,7 +358,7 @@ impl Pc1500App {
         self.key_press_timers.remove(&key);
 
         // Send key release to emulator
-        self.emulator.release_key(key as u32);
+        self.emulator.release(key);
     }
 
     fn handle_physical_keyboard(&mut self, ctx: &egui::Context) {
@@ -595,155 +390,6 @@ impl Pc1500App {
 
         for key in keys_to_release {
             self.send_key_release(key);
-        }
-    }
-
-    // ROM and system functions
-    fn load_rom_dialog(&mut self) {
-        // Try multiple ROM file names that might exist
-        let rom_files = [
-            "PC-1500_A04.ROM",
-            "PC-1500.ROM",
-            "pc1500.rom",
-            "pc1500_a04.rom",
-            "PC1500.BIN",
-        ];
-
-        let mut rom_loaded = false;
-        let mut rom_file_used = String::new();
-
-        for rom_file in &rom_files {
-            match self.emulator.load_rom(rom_file) {
-                Ok(()) => {
-                    self.rom_mode_active = true;
-                    rom_file_used = rom_file.to_string();
-                    rom_loaded = true;
-                    break;
-                }
-                Err(_) => continue,
-            }
-        }
-
-        if rom_loaded {
-            // Update key log
-            self.key_press_log
-                .push(format!("ROM loaded: {}", rom_file_used));
-            if self.key_press_log.len() > 10 {
-                self.key_press_log.remove(0);
-            }
-        } else {
-            // Update key log
-            self.key_press_log
-                .push("ROM load failed - using test mode".to_string());
-            if self.key_press_log.len() > 10 {
-                self.key_press_log.remove(0);
-            }
-        }
-    }
-
-    fn try_load_default_rom(&mut self) {
-        if let Err(_) = self.emulator.load_rom("PC-1500_A04.ROM") {
-            self.emulator.init_test_mode();
-            self.emulator.display_message("ROM NOT FOUND");
-        }
-    }
-
-    fn reset_system(&mut self) {
-        self.emulator.init_test_mode();
-        self.emulator.display_message("SYSTEM RESET");
-        self.pressed_keys.clear();
-        self.rom_mode_active = false;
-    }
-
-    fn clear_display(&mut self) {
-        for i in 0x7600..=0x774F {
-            self.emulator.write_memory(i, 0x00);
-        }
-    }
-
-    fn show_test_pattern(&mut self) {
-        // Write test pattern to display memory
-        for i in 0..80 {
-            self.emulator.write_memory(0x7600 + i, (i % 16) as u8);
-            self.emulator.write_memory(0x7700 + i, ((i + 8) % 16) as u8);
-        }
-
-        // Log the action
-        self.key_press_log
-            .push("Test pattern written to display".to_string());
-        if self.key_press_log.len() > 10 {
-            self.key_press_log.remove(0);
-        }
-    }
-
-    fn test_pc1500_display_system(&mut self) {
-        // Advanced test pattern similar to pc1500_memory_writer.rs
-
-        // Clear both sections first
-        for i in 0..80 {
-            self.emulator.write_memory(0x7600 + i, 0x00);
-            self.emulator.write_memory(0x7700 + i, 0x00);
-        }
-
-        // Test first char (bits 0,1,2,3) - 4 DOTS in first section
-        for i in 0..16u16 {
-            let pattern = i as u8; // First char 0-F in bits 0,1,2,3
-            self.emulator.write_memory(0x7600 + 20 + i, pattern);
-        }
-
-        // Test second char (bits 4,5,6) - 3 DOTS in first section
-        for i in 0..8u16 {
-            let pattern = (i << 4) as u8; // Second char 0-7 in bits 4,5,6
-            self.emulator.write_memory(0x7600 + 40 + i, pattern);
-        }
-
-        // Test combined patterns in second section
-        for i in 0..8u16 {
-            let first_char = i + 8; // 8-F
-            let second_char = i; // 0-7
-            let pattern = (first_char | (second_char << 4)) as u8;
-            self.emulator.write_memory(0x7700 + i, pattern);
-        }
-
-        // Test full patterns in second section
-        for i in 0..16u16 {
-            let pattern = (0x70 | i) as u8; // Mixed pattern
-            self.emulator.write_memory(0x7700 + 20 + i, pattern);
-        }
-
-        // Log the action
-        self.key_press_log
-            .push("PC-1500 display system test executed".to_string());
-        if self.key_press_log.len() > 10 {
-            self.key_press_log.remove(0);
-        }
-    }
-
-    fn show_system_info(&mut self) {
-        // Show system information in the key log
-        let cpu_state = self.emulator.cpu_state();
-
-        if self.emulator.is_rom_mode() {
-            self.key_press_log
-                .push("SYSTEM: ROM MODE ACTIVE".to_string());
-            self.key_press_log
-                .push("Running authentic PC-1500 firmware".to_string());
-        } else {
-            self.key_press_log
-                .push("SYSTEM: TEST MODE ACTIVE".to_string());
-            self.key_press_log.push("Running test program".to_string());
-        }
-
-        self.key_press_log
-            .push(format!("CPU PC: 0x{:04X}", cpu_state.pc));
-        self.key_press_log
-            .push(format!("CPU A: 0x{:02X}", cpu_state.a));
-        self.key_press_log
-            .push(format!("Frame: {}", self.frame_count));
-
-        // Keep log size reasonable
-        while self.key_press_log.len() > 10 {
-            self.key_press_log.remove(0);
         }
     }
 }
@@ -804,9 +450,5 @@ impl eframe::App for Pc1500App {
                 ));
             }
         });
-
-        // Additional windows - these create their own UI contexts
-        self.render_cpu_info(ctx);
-        self.render_memory_map_window(ctx);
     }
 }
