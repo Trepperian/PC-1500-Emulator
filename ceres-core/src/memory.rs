@@ -106,10 +106,10 @@ impl Pc1500 {
             _ => {
                 let pu = self.lh5801.pu();
                 let pv = self.lh5801.pv();
-                println!(
-                    "Reading unmapped memory at {:04X}, PU: {}, PV: {}",
-                    addr, pu, pv
-                );
+                // println!(
+                //     "Reading unmapped memory at {:04X}, PU: {}, PV: {}",
+                //     addr, pu, pv
+                // );
                 INITIAL_VALUE
                 // Panic for now
                 // panic!("Attempted to read unmapped memory at {:04X}", addr);
@@ -122,12 +122,12 @@ impl Pc1500 {
 
         match addr {
             0x7600..0x764D | 0x7700..0x774D => {
-                println!(
-                    "Writing to display memory at {:04X} with pc: {:04X}, val: {:02X}",
-                    addr,
-                    self.lh5801.p(),
-                    value
-                );
+                // println!(
+                //     "Writing to display memory at {:04X} with pc: {:04X}, val: {:02X}",
+                //     addr,
+                //     self.lh5801.p(),
+                //     value
+                // );
                 self.memory.standard_user_system_memory
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
             }
@@ -189,10 +189,10 @@ impl Pc1500 {
                 // panic!("Attempted to write to unmapped memory at {:04X}", addr);
                 let pu = self.lh5801.pu();
                 let pv = self.lh5801.pv();
-                println!(
-                    "Writing to unmapped memory at {:04X}, PU: {}, PV: {}",
-                    addr, pu, pv
-                );
+                // println!(
+                //     "Writing to unmapped memory at {:04X}, PU: {}, PV: {}",
+                //     addr, pu, pv
+                // );
             }
         }
     }

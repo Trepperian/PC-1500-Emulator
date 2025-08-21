@@ -265,6 +265,50 @@ impl Pc1500 {
                 0xE2DE => println!("WAIT_4_KB_12"),
                 0xE2E4 => println!("WAIT_4_KB_13"),
                 0xE2F2 => println!("WAIT_4_KB_14"),
+                0xE2F6 => println!("WAIT_4_KB_15"),
+                0xE2FF => println!("WAIT_4_KB_16"),
+                0xE303 => println!("WAIT_4_KB_17"),
+                0xE311 => println!("WAIT_4_KB_18"),
+                0xE315 => println!("WAIT_4_KB_19"),
+                0xE334 => println!("WAIT_4_KB_20"),
+                0xE33A => println!("WAIT_4_KB_21"),
+                0xE33F => println!("AUTO_OFF"),
+                0xE347 => println!("AUTO_OFF_1"),
+                0xE366 => println!("AUTO_OFF_2"),
+                0xE37B => println!("AUTO_OFF_3"),
+                0xE385 => println!("AUTO_OFF_4"),
+                0xE38D => println!("AUTO_OFF_5"),
+                0xE39D => println!("AUTO_OFF_6"),
+                0xE39E => println!("AUTO_OFF_6_1"),
+                0xE3A1 => println!("AUTO_OFF_7"),
+                0xE3A7 => println!("AUTO_OFF_8"),
+                0xE3AC => println!("AUTO_OFF_9"),
+                0xE3B1 => println!("AUTO_OFF_10"),
+                0xE3B3 => println!("AUTO_OFF_11"),
+                0xE3BC => println!("AUTO_OFF_12"),
+                0xE3C2 => println!("AUTO_OFF_13"),
+                0xE3C8 => println!("AUTO_OFF_14"),
+                0xE3E8 => println!("AUTO_OFF_15"),
+                0xE3EF => println!("AUTO_OFF_16"),
+                0xE3F6 => println!("AUTO_OFF_17"),
+                0xE408 => println!("AUTO_OFF_18"),
+                0xE40C => println!("AUTO_OFF_19"),
+                0xE413 => println!("AUTO_OFF_20"),
+                0xCA7A => println!("EDITOR"),
+                0xCA7D => println!("EDITOR_1"),
+                0xCAAE => println!("EDITOR_2"),
+                0xCADA => println!("EDITOR_3"),
+                0xCADF => println!("EDITOR_4"),
+                0xCAE8 => {
+                    println!("EDITOR_5");
+                }
+                0xCAF8 => println!("EDITOR_6"),
+                0xCAFC => println!("EDITOR_7"),
+                0xCB27 => println!("EDITOR_8"),
+                0xCB2B => println!("EDITOR_9"),
+                0xCB2D => println!("EDITOR_10"),
+                0xCB3C => println!("EDITOR_11"),
+                0xCB46 => println!("EDITOR_12"),
                 0xE418 => println!("ISKEY"),
                 0xE41A => {
                     println!("ISKEY_1");
@@ -322,6 +366,8 @@ impl Pc1500 {
                 0xE8CA => println!("PRGM_DISP"),
                 0xE8FF => println!("PRGM_DISP_4"),
                 0xDDC8 => println!("LOAD_XREG"),
+                0xCE9F => println!("RSRV_MEM_START"),
+                0xCEAC => println!("RSRV_MEM_START_1"),
                 _ => {
                     if self.lh5801.debug_messages < 1000 {
                         self.lh5801.debug_messages -= 1;
@@ -648,16 +694,16 @@ impl Pc1500 {
         let addr = self.pop_word();
         self.set_p(addr);
 
-        println!(
-            "RTN to {:04X} with Z: {} and C: {}",
-            addr,
-            self.get_zero_flag(),
-            self.get_carry_flag()
-        );
+        // println!(
+        //     "RTN to {:04X} with Z: {} and C: {}",
+        //     addr,
+        //     self.get_zero_flag(),
+        //     self.get_carry_flag()
+        // );
 
-        if addr == 0xe270 && !self.get_zero_flag() {
-            // self.lh5801.debug_messages = 0;
-        }
+        // if addr == 0xe270 && !self.get_zero_flag() {
+        //     // self.lh5801.debug_messages = 0;
+        // }
         // self.lh5801.print_insts = false;
     }
 

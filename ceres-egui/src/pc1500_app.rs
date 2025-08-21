@@ -216,7 +216,7 @@ impl Pc1500App {
 
             // Row 1: Function keys and system keys
             ui.horizontal(|ui| {
-                create_key(ui, Pc1500Key::Def, "DEF", 35.0);
+                create_key(ui, Pc1500Key::Control, "DEF", 35.0);
                 create_key(ui, Pc1500Key::F1, "F1", 30.0);
                 create_key(ui, Pc1500Key::F2, "F2", 30.0);
                 create_key(ui, Pc1500Key::F3, "F3", 30.0);
