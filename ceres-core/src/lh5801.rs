@@ -36,6 +36,8 @@ pub struct Lh5801 {
     timer_state: usize,
     step_previous_state: usize,
     ticks: usize,
+
+    debug_messages: usize,
 }
 
 impl Lh5801 {
@@ -228,32 +230,48 @@ impl Pc1500 {
 
     fn set_p(&mut self, addr: u16) {
         if DO_DEBUG_ROM {
+            self.lh5801.debug_messages += 1;
+
             match addr {
+                0xC8B4 => println!("BCMD_RUN"),
                 0xC9E4 => println!("COLD_START"),
+                0xCFCC => println!("INIT_SYS_ADDR"),
+                0xD02B => println!("INBUF_CLR_1"),
+                0xD030 => println!("INBUF_CLR_2"),
+                0xD0B4 => println!("PRG_SEARCH"),
+                0xDF63 => println!("IS_STRING"),
                 0xE000 => println!("RESET"),
+                0xE153 => println!("IO_INT"),
                 0xE171 => println!("ISR_HANDLER"),
                 0xE22C => println!("TIMER_ISR"),
+                0xE234 => println!("PVBANK"),
                 0xE243 => println!("WAIT_4_KB"),
                 0xE269 => println!("WAIT_4_KB_4"),
-                0xE451 => println!("CHK_BRK"),
-                0xE42C => println!("KEY_2_ASCII"),
                 0xE41A => println!("ISKEY_1"),
                 0xE425 => println!("ISKEY_2"),
-                0xEDEF => println!("GPRINT_OUT"),
-                0xEDF6 => {
-                    println!("GPRINT_OUT_1, a = {:02X}", self.lh5801.a());
-                }
-                0xEE07 => {
-                    println!("GPRINT_OUT_2, a = {:02X}", self.lh5801.a());
-                }
-                0xEE0E => {
-                    println!("GPRINT_OUT_3, a = {:02X}", self.lh5801.a());
-                }
-                0xEE13 => {
-                    println!("GPRINT_OUT_4, a = {:02X}", self.lh5801.a());
-                }
+                0xE42C => println!("KEY_2_ASCII"),
+                0xE451 => println!("CHK_BRK"),
+                0xE4A8 => println!("TOK_TABL_SRCH"),
+                0xE573 => println!("TIMER_MODE"),
+                0xEDEF => println!("GPRINT_OUT, A = {:02X}", self.lh5801.a()),
+                0xEDF6 => println!("GPRINT_OUT_1, A = {:02X}", self.lh5801.a()),
+                0xF5B5 => println!("BCMD_PI"),
+                0xF61B => println!("RAND_GEN_5"),
+                0xF729 => println!("XFER_SM_ARX2ARY"),
+                0xF733 => println!("XREG_2_YREG"),
+                0xF73D => println!("XFER_ARY_2_ARX"),
+                0xF763 => println!("CLR_N_XREG"),
+                0xF79C => println!("ARX_SHL_4BITS"),
+                0xF7B0 => println!("SET_HB_XYREGS"),
+                0xF7CC => println!("ADD_SM_ARX_ARX"),
 
-                _ => {}
+                _ => {
+                    self.lh5801.debug_messages -= 1;
+                }
+            }
+
+            if self.lh5801.debug_messages > 25 {
+                panic!("Too many debug messages");
             }
         }
 
@@ -569,18 +587,15 @@ impl Pc1500 {
     }
 
     fn rtn(&mut self) {
-        self.lh5801.s = self.lh5801.s.wrapping_add(1);
-        let hi = self.cpu_readmem(self.lh5801.s) as u16;
-        self.lh5801.s = self.lh5801.s.wrapping_add(1);
-        let lo = self.cpu_readmem(self.lh5801.s) as u16;
-        self.set_p((hi << 8) | lo);
+        let addr = self.pop_word();
+        self.set_p(addr);
 
-        // println!("Z = {}", self.get_zero_flag());
+        // println!("RTN to {:04X}", addr);
     }
 
     fn rti(&mut self) {
-        self.rtn();
-
+        let addr = self.pop_word();
+        self.set_p(addr);
         self.lh5801.s = self.lh5801.s.wrapping_add(1);
         self.lh5801.t = self.cpu_readmem(self.lh5801.s);
     }
@@ -624,14 +639,16 @@ impl Pc1500 {
         let t = self.readop_word();
         self.push_word(self.lh5801.p);
         self.set_p(t);
+        // println!("SJP to {:04X}", t);
     }
 
     fn vector(&mut self, doit: bool, nr: u8) {
         if doit {
             self.push_word(self.lh5801.p);
-            let hi = self.cpu_readmem(0xFF00 | u16::from(nr)) as u16;
-            let lo = self.cpu_readmem(0xFF00 | u16::from(nr) + 1) as u16;
-            self.set_p((hi << 8) | lo);
+            let addr = self.get_mem16(0xFF00 | u32::from(nr));
+            self.set_p(addr);
+
+            // println!("VEC to {:04X} for vector {}", addr, nr);
 
             self.add_state(21 - 8);
         }
@@ -1112,10 +1129,11 @@ impl Pc1500 {
                 self.lh5801.is_halted = true;
                 self.add_state(8);
             }
-            0xb8 => {
-                self.push_word((self.lh5801.sh() as u16) << 8);
-                self.add_state(14);
-            }
+            // Not in the official documentation, nor used in rom
+            // 0xb8 => {
+            //     self.push_word((self.lh5801.sh() as u16) << 8);
+            //     self.add_state(14);
+            // }
             0xba => {
                 self.ita();
                 self.add_state(9);
