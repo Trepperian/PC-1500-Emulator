@@ -28,7 +28,6 @@ pub struct Pc1500App {
 
     // DEBUG INFO
     frame_count: u64,
-    key_press_log: Vec<String>,
 
     // PHYSICAL KEYBOARD MAPPING - Map PC keyboard to PC-1500 keys
     pc_to_pc1500_mapping: std::collections::HashMap<egui::Key, Pc1500Key>,
@@ -54,7 +53,6 @@ impl Pc1500App {
             display_height: 7,
             display_scale: 8.0,
             frame_count: 0,
-            key_press_log: Vec::new(),
             pc_to_pc1500_mapping: Self::create_keyboard_mapping(),
         }
     }
@@ -196,9 +194,6 @@ impl Pc1500App {
         }
 
         ui.group(|ui| {
-            ui.label("PC-1500 Virtual Keyboard - AUTHENTIC LAYOUT");
-            ui.label("Click keys to send to emulator | Yellow = pressed");
-
             let mut clicked_keys = Vec::new();
 
             // Helper function to create keyboard button
@@ -324,12 +319,6 @@ impl Pc1500App {
             // Process clicked keys from virtual keyboard
             for key in clicked_keys {
                 self.send_key_press(key);
-                // For virtual keyboard clicks, also log as virtual click
-                self.key_press_log
-                    .push(format!("Key clicked: {:?} (virtual keyboard)", key));
-                if self.key_press_log.len() > 10 {
-                    self.key_press_log.remove(0);
-                }
             }
         });
     }
@@ -343,13 +332,6 @@ impl Pc1500App {
 
         // Send key press to emulator
         self.emulator.press(key);
-
-        // Log key press for debugging
-        self.key_press_log
-            .push(format!("Key pressed: {:?} (physical keyboard)", key));
-        if self.key_press_log.len() > 10 {
-            self.key_press_log.remove(0);
-        }
     }
 
     fn send_key_release(&mut self, key: Pc1500Key) {
@@ -432,12 +414,6 @@ impl eframe::App for Pc1500App {
                     "Debug: Frame {}, Keys: {:?}",
                     self.frame_count, self.pressed_keys
                 ));
-
-                // Show key press log
-                ui.label("Recent key presses:");
-                for log_entry in &self.key_press_log {
-                    ui.small(log_entry);
-                }
 
                 // Show keyboard mapping status
                 ui.label(format!(

@@ -4,10 +4,6 @@ const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/Original_ROMs/PC-1500_A04.ROM");
 const INITIAL_VALUE: u8 = 0xFF;
 
-const CE159_RAM_BEGIN: u32 = 0x0000;
-const CE159_RAM_END: u32 = 0xBFFF;
-const CE159_RAM_SIZE: usize = (CE159_RAM_END - CE159_RAM_BEGIN + 1) as usize;
-
 const STANDARD_USER_MEMORY_BEGIN: u32 = 0x3800;
 const STANDARD_USER_MEMORY_END: u32 = 0x5FFF;
 const STANDARD_USER_MEMORY_SIZE: usize =
@@ -28,7 +24,6 @@ const MAYBE_USABLE_SIZE: usize = (MAYBE_USABLE_END - MAYBE_USABLE_BEGIN + 1) as 
 
 pub struct MemoryBus {
     pub rom: &'static [u8],
-    pub ce159_ram: [u8; CE159_RAM_SIZE],
     pub standard_user_memory: [u8; STANDARD_USER_MEMORY_SIZE],
     pub standard_user_system_memory: [u8; STANDARD_USER_SYSTEM_MEMORY_SIZE],
     pub maybe_usable_memory: [u8; MAYBE_USABLE_SIZE],
@@ -40,7 +35,6 @@ impl MemoryBus {
             rom: PC1500_ROM_BYTES,
             standard_user_memory: [INITIAL_VALUE; STANDARD_USER_MEMORY_SIZE],
             standard_user_system_memory: [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE],
-            ce159_ram: [INITIAL_VALUE; CE159_RAM_SIZE],
             maybe_usable_memory: [INITIAL_VALUE; MAYBE_USABLE_SIZE],
         }
     }
@@ -108,9 +102,7 @@ impl Pc1500 {
             0x1F00D => self.lh5810.get_reg(lh5810::Reg::DDB),
             0x1F00E => self.lh5810.get_reg(lh5810::Reg::OPA),
             0x1F00F => self.lh5810.get_reg(lh5810::Reg::OPB),
-            CE159_RAM_BEGIN..=CE159_RAM_END => {
-                self.memory.ce159_ram[(addr - CE159_RAM_BEGIN) as usize]
-            }
+
             _ => {
                 let pu = self.lh5801.pu();
                 let pv = self.lh5801.pv();
@@ -136,7 +128,8 @@ impl Pc1500 {
                     self.lh5801.p(),
                     value
                 );
-                self.memory.ce159_ram[(addr - CE159_RAM_BEGIN) as usize] = value;
+                self.memory.standard_user_system_memory
+                    [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
             }
 
             STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
@@ -190,9 +183,7 @@ impl Pc1500 {
             0x1F00F => self
                 .lh5810
                 .set_reg(lh5810::Reg::OPB, value, self.lh5801.timer_state()),
-            CE159_RAM_BEGIN..=CE159_RAM_END => {
-                self.memory.ce159_ram[(addr - CE159_RAM_BEGIN) as usize] = value;
-            }
+
             _ => {
                 // Unmapped memory, ignore writes
                 // panic!("Attempted to write to unmapped memory at {:04X}", addr);

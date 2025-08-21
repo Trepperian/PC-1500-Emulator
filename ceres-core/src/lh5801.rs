@@ -178,6 +178,7 @@ impl Lh5801 {
     pub fn new() -> Self {
         let mut ret = Lh5801::default();
         ret.reset_flag = true;
+        ret.debug_messages = 1200;
         ret
     }
 
@@ -232,7 +233,9 @@ impl Pc1500 {
 
     fn set_p(&mut self, addr: u16) {
         if DO_DEBUG_ROM {
-            self.lh5801.debug_messages += 1;
+            if self.lh5801.debug_messages < 1000 {
+                self.lh5801.debug_messages += 1;
+            }
 
             match addr {
                 0xC8B4 => println!("BCMD_RUN"),
@@ -248,17 +251,42 @@ impl Pc1500 {
                 0xE22C => println!("TIMER_ISR"),
                 0xE234 => println!("PVBANK"),
                 0xE243 => println!("WAIT_4_KB"),
+                0xE246 => println!("WAIT_4_KB_1"),
+                0xE24E => println!("WAIT_4_KB_2"),
+                0xE25B => println!("WAIT_4_KB_3"),
                 0xE269 => println!("WAIT_4_KB_4"),
-                0xE41A => println!("ISKEY_1"),
+                0xE29D => println!("WAIT_4_KB_5"),
+                0xE29E => println!("WAIT_4_KB_6"),
+                0xE2AC => println!("WAIT_4_KB_7"),
+                0xE2B7 => println!("WAIT_4_KB_8"),
+                0xE2C2 => println!("WAIT_4_KB_9"),
+                0xE2C4 => println!("WAIT_4_KB_10"),
+                0xE2D8 => println!("WAIT_4_KB_11"),
+                0xE2DE => println!("WAIT_4_KB_12"),
+                0xE2E4 => println!("WAIT_4_KB_13"),
+                0xE2F2 => println!("WAIT_4_KB_14"),
+                0xE418 => println!("ISKEY"),
+                0xE41A => {
+                    println!("ISKEY_1");
+                }
                 0xE425 => println!("ISKEY_2"),
-                0xE42C => println!("KEY_2_ASCII"),
+                0xE42C => {
+                    println!("KEY_2_ASCII");
+                    // self.lh5801.print_insts = true;
+                }
+                0xE430 => println!("KEY_2_ASCII_1"),
+                0xE441 => println!("KEY_2_ASCII_2"),
+                0xE444 => println!("KEY_2_ASCII_3"),
+                0xE44C => {
+                    println!("KEY_2_ASCII_4");
+                }
                 0xE451 => println!("CHK_BRK"),
                 0xE4A8 => println!("TOK_TABL_SRCH"),
                 0xE573 => println!("TIMER_MODE"),
                 0xEDEF => println!("GPRINT_OUT, A = {:02X}", self.lh5801.a()),
                 0xEDF6 => {
                     println!("GPRINT_OUT_1, A = {:02X}", self.lh5801.a());
-                    self.lh5801.print_insts = true;
+                    // self.lh5801.print_insts = true;
                 }
                 0xF5B5 => println!("BCMD_PI"),
                 0xF61B => println!("RAND_GEN_5"),
@@ -274,7 +302,6 @@ impl Pc1500 {
                 0xED5B => println!("CHAR_OUT_2"),
                 0xE9EB => {
                     println!("STATUS_CHK");
-                    self.lh5801.print_insts = true;
                 }
                 0xE9F8 => {
                     println!("STATUS_CHK_1");
@@ -292,13 +319,17 @@ impl Pc1500 {
                 0xEA5D => println!("STATUS_CHK_12"),
                 0xEA60 => println!("STATUS_CHK_13"),
                 0xEA67 => println!("STATUS_CHK_14"),
-
+                0xE8CA => println!("PRGM_DISP"),
+                0xE8FF => println!("PRGM_DISP_4"),
+                0xDDC8 => println!("LOAD_XREG"),
                 _ => {
-                    self.lh5801.debug_messages -= 1;
+                    if self.lh5801.debug_messages < 1000 {
+                        self.lh5801.debug_messages -= 1;
+                    }
                 }
             }
 
-            if self.lh5801.debug_messages > 24 {
+            if self.lh5801.debug_messages < 1000 && self.lh5801.debug_messages > 20 {
                 panic!("Too many debug messages");
             }
         }
@@ -360,8 +391,7 @@ impl Pc1500 {
 
     fn cpu_readop(&mut self) -> u8 {
         let byte = self.read_byte(self.lh5801.p.into());
-        // self.lh5801.p = self.lh5801.p.wrapping_add(1);
-        self.set_p(self.lh5801.p.wrapping_add(1));
+        self.lh5801.p = self.lh5801.p.wrapping_add(1);
         byte
     }
 
@@ -618,7 +648,17 @@ impl Pc1500 {
         let addr = self.pop_word();
         self.set_p(addr);
 
-        // println!("RTN to {:04X}", addr);
+        println!(
+            "RTN to {:04X} with Z: {} and C: {}",
+            addr,
+            self.get_zero_flag(),
+            self.get_carry_flag()
+        );
+
+        if addr == 0xe270 && !self.get_zero_flag() {
+            // self.lh5801.debug_messages = 0;
+        }
+        // self.lh5801.print_insts = false;
     }
 
     fn rti(&mut self) {
@@ -658,7 +698,8 @@ impl Pc1500 {
         self.add_state(8);
         if self.lh5801.ul() != 0 {
             self.add_state(3);
-            self.set_p(self.lh5801.p.wrapping_sub(u16::from(t)));
+            // self.set_p(self.lh5801.p.wrapping_sub(u16::from(t)));
+            self.lh5801.p = self.lh5801.p.wrapping_sub(u16::from(t));
         }
         self.lh5801.set_ul(self.lh5801.ul().wrapping_sub(1));
     }
@@ -1178,7 +1219,6 @@ impl Pc1500 {
             }
             0xc1 => {
                 self.lh5801.disp = true;
-                self.clear_display_memory();
                 self.add_state(8);
             }
             0xc8 => {
@@ -1256,7 +1296,11 @@ impl Pc1500 {
         let oper = self.cpu_readop();
 
         if self.lh5801.print_insts {
-            println!("instruction: {:02X} at addr: {:04X}", oper, self.lh5801.p);
+            println!(
+                "instruction: {:02X} at addr: {:04X}",
+                oper,
+                self.lh5801.p - 1
+            );
         }
 
         match oper {

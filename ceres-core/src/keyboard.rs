@@ -114,7 +114,7 @@ pub struct Keyboard {
 
 impl Keyboard {
     pub fn new() -> Self {
-        Self { ks: 0, input: 0 }
+        Self { ks: 0, input: 0xff }
     }
 
     pub fn set_ks(&mut self, ks: u8) {
@@ -126,15 +126,15 @@ impl Keyboard {
     }
 
     pub fn press(&mut self, key: Key) {
-        self.input = 1;
+        let mut data = 0;
 
-        self.input ^ 0xff;
+        data |= 8;
+
+        self.input = data ^ 0xff;
     }
 
     pub fn release(&mut self, key: Key) {
-        self.input = 0;
-
-        self.input ^ 0xff;
+        self.input = 0xff;
     }
 
     pub fn input(&self) -> u8 {
