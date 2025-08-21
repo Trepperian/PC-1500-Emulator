@@ -9,7 +9,7 @@ fn low(b: u8) -> u8 {
 }
 
 fn high(b: u8) -> u8 {
-    b >> 4
+    (b >> 4) & 0x0F
 }
 
 #[derive(Debug, Clone)]
@@ -45,15 +45,15 @@ impl DisplayController {
 }
 
 impl Pc1500 {
-    pub fn update_display_buffer(&mut self) {
-        self.display.clear();
 
+    pub fn update_display_buffer(&mut self) {
         if !self.lh5801.display_enabled() {
+            self.display.clear();
             return;
         }
 
         for ind in (0..0x4D).step_by(2) {
-            let adr = 0x7600 + ind;
+            let adr = 0x7600 | ind;
             let data = low(self.read_byte(adr)) | (low(self.read_byte(adr + 1)) << 4);
             let x = ind >> 1;
 
@@ -78,7 +78,7 @@ impl Pc1500 {
         }
 
         for ind in (0..0x4D).step_by(2) {
-            let adr = 0x7700 + ind;
+            let adr = 0x7700 | ind;
             let data = low(self.read_byte(adr)) | (low(self.read_byte(adr + 1)) << 4);
             let x = (ind >> 1) + 39;
 
@@ -101,8 +101,6 @@ impl Pc1500 {
                 }
             }
         }
-
-        // self.clear_display_memory();
     }
 }
 

@@ -60,6 +60,10 @@ pub struct Lh5810 {
 }
 
 impl Lh5810 {
+    pub fn int(&self) -> bool {
+        self.int
+    }
+
     pub fn new_opc(&self) -> bool {
         self.new_opc
     }

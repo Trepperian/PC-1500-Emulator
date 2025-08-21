@@ -23,7 +23,7 @@ pub struct Pc1500 {
     lh5810: Lh5810,
     pd1990ac: Pd1990ac,
     memory: MemoryBus,
-    joypad: Keyboard,
+    keyboard: Keyboard,
     display: DisplayController,
 }
 
@@ -33,7 +33,7 @@ impl Pc1500 {
         Self {
             lh5801: Lh5801::new(),
             memory: MemoryBus::new(),
-            joypad: Keyboard::new(),
+            keyboard: Keyboard::new(),
             display: DisplayController::new(),
             lh5810: Lh5810::new(),
             pd1990ac: Pd1990ac::new(),
@@ -42,7 +42,14 @@ impl Pc1500 {
 
     fn run(&mut self) {
         self.step_cpu();
+
         self.step();
+
+        self.keyboard.set_ks(self.lh5810.get_reg(lh5810::Reg::DDA));
+
+        if self.lh5810.int() {
+            self.lh5801.set_ir2(true);
+        }
     }
 
     pub fn step_frame(&mut self) {
@@ -59,11 +66,16 @@ impl Pc1500 {
     }
 
     pub fn press(&mut self, key: Key) {
-        self.joypad.press(key);
+        // self.keyboard.press(key);
     }
 
     pub fn release(&mut self, key: Key) {
-        self.joypad.release(key);
+        // self.keyboard.release(key);
+    }
+
+    // #define READ_BIT(b,p)	( ((b)>>(p)) & 0x01 ? 1 :0 )
+    fn read_bit(byte: u8, position: u8) -> bool {
+        ((byte >> position) & 0x01) != 0
     }
 
     // bool CLH5810_PC1500::step()
@@ -121,13 +133,13 @@ impl Pc1500 {
     fn step(&mut self) {
         if self.lh5810.new_opc() {
             let t = self.lh5810.get_reg(lh5810::Reg::OPC);
-            self.pd1990ac.set_data(t & 0x01 != 0);
-            self.pd1990ac.set_stb(t & 0x02 != 0);
-            self.pd1990ac.set_clk(t & 0x04 != 0);
-            self.pd1990ac.set_out_enable(t & 0x08 != 0);
-            self.pd1990ac.set_c0(t & 0x10 != 0);
-            self.pd1990ac.set_c1(t & 0x20 != 0);
-            self.pd1990ac.set_c2(t & 0x40 != 0);
+            self.pd1990ac.set_data(Self::read_bit(t, 0));
+            self.pd1990ac.set_stb(Self::read_bit(t, 1));
+            self.pd1990ac.set_clk(Self::read_bit(t, 2));
+            self.pd1990ac.set_out_enable(Self::read_bit(t, 3));
+            self.pd1990ac.set_c0(Self::read_bit(t, 3));
+            self.pd1990ac.set_c1(Self::read_bit(t, 4));
+            self.pd1990ac.set_c2(Self::read_bit(t, 5));
 
             self.pd1990ac.step(self.lh5801.timer_state());
             self.lh5810.set_new_opc(false);
