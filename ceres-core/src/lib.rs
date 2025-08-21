@@ -66,11 +66,11 @@ impl Pc1500 {
     }
 
     pub fn press(&mut self, key: Key) {
-        // self.keyboard.press(key);
+        self.keyboard.press(key);
     }
 
     pub fn release(&mut self, key: Key) {
-        // self.keyboard.release(key);
+        self.keyboard.release(key);
     }
 
     // #define READ_BIT(b,p)	( ((b)>>(p)) & 0x01 ? 1 :0 )

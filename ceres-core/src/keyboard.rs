@@ -109,11 +109,12 @@ pub enum Key {
 #[derive(Default, Debug)]
 pub struct Keyboard {
     ks: u8,
+    input: u8,
 }
 
 impl Keyboard {
     pub fn new() -> Self {
-        Self { ks: 0 }
+        Self { ks: 0, input: 0 }
     }
 
     pub fn set_ks(&mut self, ks: u8) {
@@ -122,5 +123,21 @@ impl Keyboard {
 
     pub fn get_ks(&self) -> u8 {
         self.ks
+    }
+
+    pub fn press(&mut self, key: Key) {
+        self.input = 1;
+
+        self.input ^ 0xff;
+    }
+
+    pub fn release(&mut self, key: Key) {
+        self.input = 0;
+
+        self.input ^ 0xff;
+    }
+
+    pub fn input(&self) -> u8 {
+        self.input
     }
 }

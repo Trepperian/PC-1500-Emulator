@@ -1,0 +1,3 @@
+[submodule "Sharp_PC-1500_ROM_Disassembly"]
+	path = Sharp_PC-1500_ROM_Disassembly
+	url = https://github.com/Jeff-Birt/Sharp_PC-1500_ROM_Disassembly.git

@@ -1,6 +1,7 @@
 use crate::{Pc1500, lh5810};
 
-const PC1500_ROM_BYTES: &[u8] = include_bytes!("../../pc1500-roms/bin/PC-1500_A04.ROM");
+const PC1500_ROM_BYTES: &[u8] =
+    include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/Original_ROMs/PC-1500_A04.ROM");
 const INITIAL_VALUE: u8 = 0xFF;
 
 const CE159_RAM_BEGIN: u32 = 0x0000;

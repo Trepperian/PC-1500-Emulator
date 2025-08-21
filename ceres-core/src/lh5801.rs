@@ -37,7 +37,9 @@ pub struct Lh5801 {
     step_previous_state: usize,
     ticks: usize,
 
+    // DEBUG UTILS
     debug_messages: usize,
+    print_insts: bool,
 }
 
 impl Lh5801 {
@@ -207,7 +209,7 @@ impl Pc1500 {
 
     fn cpu_internal_reset(&mut self) {
         self.lh5801.reset_flag = true;
-        self.lh5801.p = self.get_mem16(0xFFFE);
+        self.set_p(self.get_mem16(0xFFFE));
 
         self.lh5801.a = 0;
         self.lh5801.t = 0;
@@ -254,7 +256,10 @@ impl Pc1500 {
                 0xE4A8 => println!("TOK_TABL_SRCH"),
                 0xE573 => println!("TIMER_MODE"),
                 0xEDEF => println!("GPRINT_OUT, A = {:02X}", self.lh5801.a()),
-                0xEDF6 => println!("GPRINT_OUT_1, A = {:02X}", self.lh5801.a()),
+                0xEDF6 => {
+                    println!("GPRINT_OUT_1, A = {:02X}", self.lh5801.a());
+                    self.lh5801.print_insts = true;
+                }
                 0xF5B5 => println!("BCMD_PI"),
                 0xF61B => println!("RAND_GEN_5"),
                 0xF729 => println!("XFER_SM_ARX2ARY"),
@@ -264,13 +269,36 @@ impl Pc1500 {
                 0xF79C => println!("ARX_SHL_4BITS"),
                 0xF7B0 => println!("SET_HB_XYREGS"),
                 0xF7CC => println!("ADD_SM_ARX_ARX"),
+                0xED4D => println!("CHAR_OUT"),
+                0xED57 => println!("CHAR_OUT_1"),
+                0xED5B => println!("CHAR_OUT_2"),
+                0xE9EB => {
+                    println!("STATUS_CHK");
+                    self.lh5801.print_insts = true;
+                }
+                0xE9F8 => {
+                    println!("STATUS_CHK_1");
+                }
+                0xE9F9 => println!("STATUS_CHK_2"),
+                0xEA0E => println!("STATUS_CHK_3"),
+                0xEA10 => println!("STATUS_CHK_4"),
+                0xEA18 => println!("STATUS_CHK_5"),
+                0xEA1E => println!("STATUS_CHK_6"),
+                0xEA26 => println!("STATUS_CHK_7"),
+                0xEA34 => println!("STATUS_CHK_8"),
+                0xEA3D => println!("STATUS_CHK_9"),
+                0xEA52 => println!("STATUS_CHK_10"),
+                0xEA5C => println!("STATUS_CHK_11"),
+                0xEA5D => println!("STATUS_CHK_12"),
+                0xEA60 => println!("STATUS_CHK_13"),
+                0xEA67 => println!("STATUS_CHK_14"),
 
                 _ => {
                     self.lh5801.debug_messages -= 1;
                 }
             }
 
-            if self.lh5801.debug_messages > 25 {
+            if self.lh5801.debug_messages > 24 {
                 panic!("Too many debug messages");
             }
         }
@@ -724,13 +752,15 @@ impl Pc1500 {
     }
 
     fn ita(&mut self) {
-        self.lh5801.a = 0;
-        // println!("ITA called, but input operation not implemented");
+        self.lh5801.a = self.keyboard.input();
     }
 
     fn instruction_fd(&mut self) {
         let oper = self.cpu_readop();
-        // println!("fd instruction: {:02X}", oper);
+
+        if self.lh5801.print_insts {
+            println!("fd instruction: {:02X}", oper);
+        }
 
         match oper {
             0x01 => {
@@ -1225,7 +1255,9 @@ impl Pc1500 {
     fn instruction(&mut self) {
         let oper = self.cpu_readop();
 
-        // println!("instruction: {:02X} at addr: {:04X}", oper, self.lh5801.p);
+        if self.lh5801.print_insts {
+            println!("instruction: {:02X} at addr: {:04X}", oper, self.lh5801.p);
+        }
 
         match oper {
             0x00 => {
