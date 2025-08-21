@@ -1,3 +1,5 @@
+use core::panic;
+
 use crate::Pc1500;
 
 const DO_DEBUG_ROM: bool = true;
@@ -575,7 +577,10 @@ impl Pc1500 {
     fn adr(&mut self, reg: u16) -> u16 {
         let loc_t = self.lh5801.t;
         let rl = (reg & 0xFF) as u8;
-        let ret = (reg & 0xFF00) | (self.add_generic(rl, self.lh5801.a, false)) as u16;
+        let rl = self.add_generic(rl, self.lh5801.a, false);
+        let rh = (reg >> 8) as u8;
+        let rh = rh.wrapping_add(if self.get_carry_flag() { 1 } else { 0 });
+        let ret = ((rh as u16) << 8) | rl as u16;
 
         self.lh5801.t = loc_t;
         ret
@@ -1105,6 +1110,7 @@ impl Pc1500 {
                 self.add_state(14);
             }
             0x5e => {
+                panic!("P = X: {:4X}", self.lh5801.x);
                 self.jmp(self.lh5801.x);
                 self.add_state(11);
             }
