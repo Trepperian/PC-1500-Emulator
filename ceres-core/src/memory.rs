@@ -16,7 +16,6 @@ const STANDARD_USER_SYSTEM_MEMORY_SIZE: usize =
 
 const ROM_BEGIN: u32 = 0xC000;
 const ROM_END: u32 = 0xFFFF;
-const ROM_SIZE: usize = (ROM_END - ROM_BEGIN + 1) as usize;
 
 pub struct MemoryBus {
     pub rom: &'static [u8],
@@ -51,14 +50,7 @@ impl Pc1500 {
         let addr = self.mirror_addresses(addr);
 
         match addr {
-            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
-                self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize]
-            }
-            STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
-                self.memory.standard_user_system_memory
-                    [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize]
-            }
-            ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
+            // ME1
             // LH5810 registers
             0x1F005 => self.lh5810.get_reg(lh5810::Reg::U),
             0x1F006 => self.lh5810.get_reg(lh5810::Reg::L),
@@ -71,18 +63,17 @@ impl Pc1500 {
             0x1F00D => self.lh5810.get_reg(lh5810::Reg::DDB),
             0x1F00E => self.lh5810.get_reg(lh5810::Reg::OPA),
             0x1F00F => self.lh5810.get_reg(lh5810::Reg::OPB),
-
-            _ => {
-                let pu = self.lh5801.pu();
-                let pv = self.lh5801.pv();
-                // println!(
-                //     "Reading unmapped memory at {:04X}, PU: {}, PV: {}",
-                //     addr, pu, pv
-                // );
-                INITIAL_VALUE
-                // Panic for now
-                // panic!("Attempted to read unmapped memory at {:04X}", addr);
+            // ME0
+            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
+                self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize]
             }
+            STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
+                self.memory.standard_user_system_memory
+                    [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize]
+            }
+            ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
+            // Unmapped
+            _ => INITIAL_VALUE,
         }
     }
 
@@ -90,17 +81,7 @@ impl Pc1500 {
         let addr = self.mirror_addresses(addr);
 
         match addr {
-            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
-                self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] =
-                    value;
-            }
-            STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
-                self.memory.standard_user_system_memory
-                    [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
-            }
-            ROM_BEGIN..=ROM_END => {
-                // ROM is read-only, ignore writes
-            }
+            // ME1
             0x1F004 => self
                 .lh5810
                 .set_reg(lh5810::Reg::RESET, value, self.lh5801.timer_state()),
@@ -137,17 +118,20 @@ impl Pc1500 {
             0x1F00F => self
                 .lh5810
                 .set_reg(lh5810::Reg::OPB, value, self.lh5801.timer_state()),
-
-            _ => {
-                // Unmapped memory, ignore writes
-                // panic!("Attempted to write to unmapped memory at {:04X}", addr);
-                let pu = self.lh5801.pu();
-                let pv = self.lh5801.pv();
-                // println!(
-                //     "Writing to unmapped memory at {:04X}, PU: {}, PV: {}",
-                //     addr, pu, pv
-                // );
+            // ME0
+            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
+                self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] =
+                    value;
             }
+            STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
+                self.memory.standard_user_system_memory
+                    [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
+            }
+            ROM_BEGIN..=ROM_END => {
+                // ROM is read-only, ignore writes
+            }
+            // Unmapped
+            _ => {}
         }
     }
 }

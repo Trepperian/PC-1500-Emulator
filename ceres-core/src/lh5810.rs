@@ -72,9 +72,10 @@ impl Lh5810 {
         self.new_opc = new_opc;
     }
 
-    pub fn set_irq(&mut self, irq: bool) {
-        self.irq = irq;
-    }
+    // TODO: serial peripherals
+    // pub fn set_irq(&mut self, irq: bool) {
+    //     self.irq = irq;
+    // }
 
     fn lh5810_pb7(&self) -> bool {
         (self.r_opb & 0x80) != 0

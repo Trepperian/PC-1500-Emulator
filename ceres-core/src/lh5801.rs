@@ -206,9 +206,9 @@ impl Pc1500 {
         (self.read_byte(addr.wrapping_add(1)) as u16) | ((self.read_byte(addr) as u16) << 8)
     }
 
-    fn reset(&mut self) {
-        self.lh5801.reset_flag = true;
-    }
+    // fn reset(&mut self) {
+    //     self.lh5801.reset_flag = true;
+    // }
 
     fn cpu_internal_reset(&mut self) {
         self.lh5801.reset_flag = true;
