@@ -61,7 +61,6 @@ pub enum Key {
     Two,
     U,
     Up,
-    UpArrow,
     V,
     W,
     X,
@@ -125,7 +124,7 @@ impl Keyboard {
             if self.pressed_keys[Key::N as usize] {
                 data |= 0x40;
             }
-            if self.pressed_keys[Key::UpArrow as usize] {
+            if self.pressed_keys[Key::Up as usize] {
                 data |= 0x80;
             }
         }

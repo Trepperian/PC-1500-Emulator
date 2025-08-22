@@ -5,7 +5,7 @@ const PC1500_ROM_BYTES: &[u8] =
 const INITIAL_VALUE: u8 = 0xFF;
 
 const STANDARD_USER_MEMORY_BEGIN: u32 = 0x3800;
-const STANDARD_USER_MEMORY_END: u32 = 0x5FFF;
+const STANDARD_USER_MEMORY_END: u32 = 0x47FF;
 const STANDARD_USER_MEMORY_SIZE: usize =
     (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
@@ -18,15 +18,10 @@ const ROM_BEGIN: u32 = 0xC000;
 const ROM_END: u32 = 0xFFFF;
 const ROM_SIZE: usize = (ROM_END - ROM_BEGIN + 1) as usize;
 
-const MAYBE_USABLE_BEGIN: u32 = 0x8000;
-const MAYBE_USABLE_END: u32 = 0xBFFF;
-const MAYBE_USABLE_SIZE: usize = (MAYBE_USABLE_END - MAYBE_USABLE_BEGIN + 1) as usize;
-
 pub struct MemoryBus {
     pub rom: &'static [u8],
     pub standard_user_memory: [u8; STANDARD_USER_MEMORY_SIZE],
     pub standard_user_system_memory: [u8; STANDARD_USER_SYSTEM_MEMORY_SIZE],
-    pub maybe_usable_memory: [u8; MAYBE_USABLE_SIZE],
 }
 
 impl MemoryBus {
@@ -35,31 +30,11 @@ impl MemoryBus {
             rom: PC1500_ROM_BYTES,
             standard_user_memory: [INITIAL_VALUE; STANDARD_USER_MEMORY_SIZE],
             standard_user_system_memory: [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE],
-            maybe_usable_memory: [INITIAL_VALUE; MAYBE_USABLE_SIZE],
         }
     }
 }
 
 impl Pc1500 {
-    // INLINE quint8 Cpc15XX::lh5810_read(UINT32 d)
-    // {
-    //     switch (d) {
-    //     case 0x1F005: return (pLH5810->GetReg(CLH5810::U)); break;
-    //     case 0x1F006: return (pLH5810->GetReg(CLH5810::L)); break;
-    //     case 0x1F007: return (pLH5810->GetReg(CLH5810::F)); break;
-    //     case 0x1F008: return (pLH5810->GetReg(CLH5810::OPC)); break;
-    //     case 0x1F009: return (pLH5810->GetReg(CLH5810::G)); break;
-    //     case 0x1F00A: return (pLH5810->GetReg(CLH5810::MSK)); break;
-    //     case 0x1F00B: return (pLH5810->GetReg(CLH5810::IF)); break;
-    //     case 0x1F00C: return (pLH5810->GetReg(CLH5810::DDA)); break;
-    //     case 0x1F00D: return (pLH5810->GetReg(CLH5810::DDB)); break;
-    //     case 0x1F00E: return (pLH5810->GetReg(CLH5810::OPA)); break;
-    //     case 0x1F00F: return (pLH5810->GetReg(CLH5810::OPB)); break;
-    //     default: break;
-    //     }
-
-    //     return 0;
-    // }
     fn mirror_addresses(&self, addr: u32) -> u32 {
         if addr >= 0x7000 && addr <= 0x75FF {
             return addr & 0x1FF | 0x7600;
@@ -83,13 +58,7 @@ impl Pc1500 {
                 self.memory.standard_user_system_memory
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize]
             }
-            MAYBE_USABLE_BEGIN..=MAYBE_USABLE_END => {
-                self.memory.maybe_usable_memory[(addr - MAYBE_USABLE_BEGIN) as usize]
-            }
             ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
-            // CE-150
-            // FIXME: complete
-            0x1B00A => 0,
             // LH5810 registers
             0x1F005 => self.lh5810.get_reg(lh5810::Reg::U),
             0x1F006 => self.lh5810.get_reg(lh5810::Reg::L),
@@ -128,10 +97,6 @@ impl Pc1500 {
             STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
                 self.memory.standard_user_system_memory
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
-            }
-
-            MAYBE_USABLE_BEGIN..=MAYBE_USABLE_END => {
-                self.memory.maybe_usable_memory[(addr - MAYBE_USABLE_BEGIN) as usize] = value;
             }
             ROM_BEGIN..=ROM_END => {
                 // ROM is read-only, ignore writes
@@ -186,19 +151,19 @@ impl Pc1500 {
         }
     }
 
-    pub fn clear_display_memory(&mut self) {
-        for ind in 0..=0x4F {
-            let adr = 0x7600 + ind;
-            self.memory.standard_user_system_memory
-                [(adr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = 0;
-        }
+    // pub fn clear_display_memory(&mut self) {
+    //     for ind in 0..=0x4F {
+    //         let adr = 0x7600 + ind;
+    //         self.memory.standard_user_system_memory
+    //             [(adr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = 0;
+    //     }
 
-        for ind in 0..=0x4F {
-            let adr = 0x7700 + ind;
-            self.memory.standard_user_system_memory
-                [(adr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = 0;
-        }
-    }
+    //     for ind in 0..=0x4F {
+    //         let adr = 0x7700 + ind;
+    //         self.memory.standard_user_system_memory
+    //             [(adr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = 0;
+    //     }
+    // }
 }
 
 impl Default for MemoryBus {

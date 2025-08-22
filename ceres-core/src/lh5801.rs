@@ -2,7 +2,7 @@ use core::panic;
 
 use crate::Pc1500;
 
-const DO_DEBUG_ROM: bool = true;
+const DO_DEBUG_ROM: bool = false;
 
 const CF: u8 = 0x01;
 const IE: u8 = 0x02;
@@ -594,16 +594,12 @@ impl Pc1500 {
     }
 
     fn sbc(&mut self, data: u8) {
-        self.lh5801.a = self.add_generic(
-            self.lh5801.a as i16,
-            (data ^ 0xff) as i16,
-            self.get_carry_flag(),
-        );
+        self.lh5801.a = self.add_generic(self.lh5801.a as i16, !data as i16, self.get_carry_flag());
     }
 
     fn cpa(&mut self, a: u8, b: u8) {
         // We only care about flags
-        let _ = self.add_generic(a as i16, (b ^ 0xff) as i16, true);
+        let _ = self.add_generic(a as i16, !b as i16, true);
     }
 
     fn decimaladd_generic<I: Into<i16>>(&mut self, left: I, right: I, carry: bool) -> u8 {
@@ -627,11 +623,8 @@ impl Pc1500 {
     }
 
     fn dcs(&mut self, data: u8) {
-        self.lh5801.a = self.decimaladd_generic(
-            self.lh5801.a as i16,
-            (data ^ 0xff) as i16,
-            self.get_carry_flag(),
-        );
+        self.lh5801.a =
+            self.decimaladd_generic(self.lh5801.a as i16, !data as i16, self.get_carry_flag());
     }
 
     fn and(&mut self, data: u8) {

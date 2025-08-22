@@ -10,15 +10,6 @@ pub struct Pc1500App {
     // KEYBOARD STATE - Full PC-1500 keyboard with timing
     pressed_keys: HashSet<Pc1500Key>,
     key_press_timers: std::collections::HashMap<Pc1500Key, std::time::Instant>,
-    keyboard_enabled: bool,
-
-    // UI STATE - Complete interface
-    show_keyboard: bool,
-    show_memory_editor: bool,
-    show_display_debug: bool,
-    show_cpu_info: bool,
-    show_rom_controls: bool,
-    debug_mode: bool,
 
     // DISPLAY - Full display system
     display_buffer: Vec<u8>,
@@ -26,8 +17,8 @@ pub struct Pc1500App {
     display_height: usize,
     display_scale: f32,
 
-    // DEBUG INFO
-    frame_count: u64,
+    // SYMBOL STATES - Cache for rendering
+    symbol_states: [bool; 14],
 
     // PHYSICAL KEYBOARD MAPPING - Map PC keyboard to PC-1500 keys
     pc_to_pc1500_mapping: std::collections::HashMap<egui::Key, Pc1500Key>,
@@ -41,18 +32,11 @@ impl Pc1500App {
             emulator,
             pressed_keys: HashSet::new(),
             key_press_timers: std::collections::HashMap::new(),
-            keyboard_enabled: true,
-            show_keyboard: true,
-            show_memory_editor: false,
-            show_display_debug: false,
-            show_cpu_info: false,
-            show_rom_controls: true,
-            debug_mode: false,
             display_buffer: vec![0; 156 * 7 * 4], // RGBA buffer
             display_width: 156,
             display_height: 7,
-            display_scale: 8.0,
-            frame_count: 0,
+            display_scale: 6.0,
+            symbol_states: [false; 14],
             pc_to_pc1500_mapping: Self::create_keyboard_mapping(),
         }
     }
@@ -102,8 +86,8 @@ impl Pc1500App {
         mapping.insert(egui::Key::Z, Pc1500Key::Z);
 
         // Function keys
-        mapping.insert(egui::Key::F1, Pc1500Key::F1);
-        mapping.insert(egui::Key::F2, Pc1500Key::F2);
+        mapping.insert(egui::Key::Exclamationmark, Pc1500Key::F1);
+        mapping.insert(egui::Key::Quote, Pc1500Key::F2);
         mapping.insert(egui::Key::F3, Pc1500Key::F3);
         mapping.insert(egui::Key::F4, Pc1500Key::F4);
         mapping.insert(egui::Key::F5, Pc1500Key::F5);
@@ -124,6 +108,10 @@ impl Pc1500App {
         mapping.insert(egui::Key::Equals, Pc1500Key::Equals);
         mapping.insert(egui::Key::Period, Pc1500Key::Dot);
 
+        // Parentheses
+        mapping.insert(egui::Key::OpenBracket, Pc1500Key::LeftParen); // [ maps to (
+        mapping.insert(egui::Key::CloseBracket, Pc1500Key::RightParen); // ] maps to )
+
         // Special PC-1500 keys mapped to PC keys
         mapping.insert(egui::Key::Backspace, Pc1500Key::Cl);
         mapping.insert(egui::Key::Tab, Pc1500Key::Mode);
@@ -136,30 +124,36 @@ impl Pc1500App {
     fn update_emulator(&mut self) {
         // Step the emulator
         self.emulator.step_frame();
-        self.frame_count += 1;
 
         // Update display buffer
-        let pixel_data = self.emulator.display().rgba_buffer();
+        let display = self.emulator.display();
+        let pixel_data = display.rgba_buffer();
         self.display_buffer.copy_from_slice(pixel_data);
-    }
 
-    fn render_menu_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.menu_button("View", |ui| {
-                ui.checkbox(&mut self.show_keyboard, "PC-1500 Keyboard");
-                ui.checkbox(&mut self.show_memory_editor, "Memory Editor");
-                ui.checkbox(&mut self.show_display_debug, "Display Debug");
-                ui.checkbox(&mut self.show_cpu_info, "CPU Information");
-                ui.checkbox(&mut self.show_rom_controls, "ROM Controls");
-                ui.separator();
-                ui.checkbox(&mut self.debug_mode, "Debug Mode");
-            });
-        });
+        // Cache symbol states for rendering
+        use ceres_core::display::Symbol;
+        self.symbol_states[Symbol::Busy as usize] = display.is_symbol_on(Symbol::Busy);
+        self.symbol_states[Symbol::Shift as usize] = display.is_symbol_on(Symbol::Shift);
+        self.symbol_states[Symbol::Kana as usize] = display.is_symbol_on(Symbol::Kana);
+        self.symbol_states[Symbol::Small as usize] = display.is_symbol_on(Symbol::Small);
+        self.symbol_states[Symbol::Deg as usize] = display.is_symbol_on(Symbol::Deg);
+        self.symbol_states[Symbol::Rad as usize] = display.is_symbol_on(Symbol::Rad);
+        self.symbol_states[Symbol::Run as usize] = display.is_symbol_on(Symbol::Run);
+        self.symbol_states[Symbol::Pro as usize] = display.is_symbol_on(Symbol::Pro);
+        self.symbol_states[Symbol::Reserve as usize] = display.is_symbol_on(Symbol::Reserve);
+        self.symbol_states[Symbol::Def as usize] = display.is_symbol_on(Symbol::Def);
+        self.symbol_states[Symbol::RomanI as usize] = display.is_symbol_on(Symbol::RomanI);
+        self.symbol_states[Symbol::RomanII as usize] = display.is_symbol_on(Symbol::RomanII);
+        self.symbol_states[Symbol::RomanIII as usize] = display.is_symbol_on(Symbol::RomanIII);
+        self.symbol_states[Symbol::Battery as usize] = display.is_symbol_on(Symbol::Battery);
     }
 
     fn render_main_display(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label("PC-1500 Display (156×7 pixels)");
+            // First render the symbols above the display
+            self.render_symbols(ui);
+
+            ui.add_space(5.0);
 
             // Display the actual screen
             let display_size = egui::Vec2::new(
@@ -188,11 +182,45 @@ impl Pc1500App {
         });
     }
 
-    fn render_pc1500_keyboard(&mut self, ui: &mut egui::Ui) {
-        if !self.show_keyboard {
-            return;
-        }
+    fn render_symbols(&mut self, ui: &mut egui::Ui) {
+        use ceres_core::display::Symbol;
 
+        ui.horizontal(|ui| {
+            ui.add_space(20.0); // Align with display area
+
+            // Define symbol positions roughly matching the PC-1500 layout
+            let symbols = [
+                ("BUSY", Symbol::Busy),
+                ("SHIFT", Symbol::Shift),
+                ("KANA", Symbol::Kana),
+                ("SML", Symbol::Small),
+                ("DEG", Symbol::Deg),
+                ("RAD", Symbol::Rad),
+                ("RUN", Symbol::Run),
+                ("PRO", Symbol::Pro),
+                ("RSV", Symbol::Reserve),
+                ("DEF", Symbol::Def),
+                ("I", Symbol::RomanI),
+                ("II", Symbol::RomanII),
+                ("III", Symbol::RomanIII),
+                ("●", Symbol::Battery),
+            ];
+
+            for (label, symbol) in symbols.iter() {
+                let is_on = self.symbol_states[*symbol as usize];
+                let color = if is_on {
+                    egui::Color32::BLACK
+                } else {
+                    egui::Color32::LIGHT_GRAY
+                };
+
+                ui.colored_label(color, *label);
+                ui.add_space(15.0);
+            }
+        });
+    }
+
+    fn render_pc1500_keyboard(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             let mut clicked_keys = Vec::new();
 
@@ -214,23 +242,26 @@ impl Pc1500App {
                 }
             };
 
-            // Row 1: Function keys and system keys
+            // Row 1: DEF + Function keys + SHIFT + OFF/ON
             ui.horizontal(|ui| {
                 create_key(ui, Pc1500Key::Control, "DEF", 35.0);
-                create_key(ui, Pc1500Key::F1, "F1", 30.0);
-                create_key(ui, Pc1500Key::F2, "F2", 30.0);
-                create_key(ui, Pc1500Key::F3, "F3", 30.0);
-                create_key(ui, Pc1500Key::F4, "F4", 30.0);
-                create_key(ui, Pc1500Key::F5, "F5", 30.0);
-                create_key(ui, Pc1500Key::F6, "F6", 30.0);
-                create_key(ui, Pc1500Key::Shift, "SHIFT", 45.0);
+                ui.add_space(15.0);
+                create_key(ui, Pc1500Key::F1, "!", 30.0);
+                create_key(ui, Pc1500Key::F2, "\"", 30.0);
+                create_key(ui, Pc1500Key::F3, "#", 30.0);
+                create_key(ui, Pc1500Key::F4, "$", 30.0);
+                create_key(ui, Pc1500Key::F5, "%", 30.0);
+                create_key(ui, Pc1500Key::F6, "&", 30.0);
+                ui.add_space(25.0);
+                create_key(ui, Pc1500Key::Shift, "SHIFT", 50.0);
+                ui.add_space(30.0);
                 create_key(ui, Pc1500Key::Off, "OFF", 35.0);
                 create_key(ui, Pc1500Key::On, "ON", 30.0);
             });
 
             ui.add_space(3.0);
 
-            // Row 2: QWERTY + numbers 7,8,9,/,CL
+            // Row 2: QWERTYUIOP + 789/?CL
             ui.horizontal(|ui| {
                 create_key(ui, Pc1500Key::Q, "Q", 25.0);
                 create_key(ui, Pc1500Key::W, "W", 25.0);
@@ -242,17 +273,17 @@ impl Pc1500App {
                 create_key(ui, Pc1500Key::I, "I", 25.0);
                 create_key(ui, Pc1500Key::O, "O", 25.0);
                 create_key(ui, Pc1500Key::P, "P", 25.0);
-                ui.add_space(10.0);
+                ui.add_space(15.0);
                 create_key(ui, Pc1500Key::Seven, "7", 25.0);
                 create_key(ui, Pc1500Key::Eight, "8", 25.0);
                 create_key(ui, Pc1500Key::Nine, "9", 25.0);
                 create_key(ui, Pc1500Key::Slash, "/", 25.0);
-                create_key(ui, Pc1500Key::Cl, "CL", 30.0);
+                create_key(ui, Pc1500Key::Cl, "CL", 35.0);
             });
 
             ui.add_space(3.0);
 
-            // Row 3: ASDF + numbers 4,5,6,*,MODE
+            // Row 3: ASDFGHJKL + 456*MODE
             ui.horizontal(|ui| {
                 create_key(ui, Pc1500Key::A, "A", 25.0);
                 create_key(ui, Pc1500Key::S, "S", 25.0);
@@ -263,17 +294,17 @@ impl Pc1500App {
                 create_key(ui, Pc1500Key::J, "J", 25.0);
                 create_key(ui, Pc1500Key::K, "K", 25.0);
                 create_key(ui, Pc1500Key::L, "L", 25.0);
-                ui.add_space(10.0);
+                ui.add_space(40.0);
                 create_key(ui, Pc1500Key::Four, "4", 25.0);
                 create_key(ui, Pc1500Key::Five, "5", 25.0);
                 create_key(ui, Pc1500Key::Six, "6", 25.0);
                 create_key(ui, Pc1500Key::Asterisk, "*", 25.0);
-                create_key(ui, Pc1500Key::Mode, "MODE", 40.0);
+                create_key(ui, Pc1500Key::Mode, "MODE", 45.0);
             });
 
             ui.add_space(3.0);
 
-            // Row 4: ZXCV + numbers 1,2,3,-,←
+            // Row 4: ZXCVBNM() + 123-←
             ui.horizontal(|ui| {
                 create_key(ui, Pc1500Key::Z, "Z", 25.0);
                 create_key(ui, Pc1500Key::X, "X", 25.0);
@@ -282,38 +313,31 @@ impl Pc1500App {
                 create_key(ui, Pc1500Key::B, "B", 25.0);
                 create_key(ui, Pc1500Key::N, "N", 25.0);
                 create_key(ui, Pc1500Key::M, "M", 25.0);
-                ui.add_space(10.0);
+                create_key(ui, Pc1500Key::LeftParen, "(", 25.0);
+                create_key(ui, Pc1500Key::RightParen, ")", 25.0);
+                ui.add_space(15.0);
                 create_key(ui, Pc1500Key::One, "1", 25.0);
                 create_key(ui, Pc1500Key::Two, "2", 25.0);
                 create_key(ui, Pc1500Key::Three, "3", 25.0);
                 create_key(ui, Pc1500Key::Minus, "-", 25.0);
-                create_key(ui, Pc1500Key::Left, "◄", 25.0);
+                create_key(ui, Pc1500Key::Left, "Left", 25.0);
             });
 
             ui.add_space(3.0);
 
-            // Row 5: Special keys, SPACE, 0, ., =, +, →
             ui.horizontal(|ui| {
                 create_key(ui, Pc1500Key::Sml, "SML", 35.0);
-                create_key(ui, Pc1500Key::Up, "▲", 25.0);
-                create_key(ui, Pc1500Key::Down, "▼", 25.0);
                 create_key(ui, Pc1500Key::Rcl, "RCL", 35.0);
-                ui.add_space(10.0);
-                create_key(ui, Pc1500Key::Space, "SPACE", 80.0);
-                ui.add_space(10.0);
+                create_key(ui, Pc1500Key::Space, "SPACE", 100.0);
+                create_key(ui, Pc1500Key::Down, "Down", 25.0);
+                create_key(ui, Pc1500Key::Up, "Up", 25.0);
+                create_key(ui, Pc1500Key::Enter, "ENTER", 80.0);
+                ui.add_space(5.0);
                 create_key(ui, Pc1500Key::Zero, "0", 25.0);
                 create_key(ui, Pc1500Key::Dot, ".", 25.0);
                 create_key(ui, Pc1500Key::Equals, "=", 25.0);
                 create_key(ui, Pc1500Key::Plus, "+", 25.0);
-                create_key(ui, Pc1500Key::Right, "►", 25.0);
-            });
-
-            ui.add_space(3.0);
-
-            // Row 6: ENTER (large key)
-            ui.horizontal(|ui| {
-                ui.add_space(200.0);
-                create_key(ui, Pc1500Key::Enter, "ENTER", 100.0);
+                create_key(ui, Pc1500Key::Right, "Right", 25.0);
             });
 
             // Process clicked keys from virtual keyboard
@@ -392,11 +416,6 @@ impl eframe::App for Pc1500App {
 
         // Main UI
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Menu bar
-            self.render_menu_bar(ui);
-
-            ui.separator();
-
             // Main display
             self.render_main_display(ui);
 
@@ -404,27 +423,6 @@ impl eframe::App for Pc1500App {
 
             // PC-1500 keyboard
             self.render_pc1500_keyboard(ui);
-
-            ui.separator();
-
-            // Debug info if enabled
-            if self.debug_mode {
-                ui.separator();
-                ui.label(format!(
-                    "Debug: Frame {}, Keys: {:?}",
-                    self.frame_count, self.pressed_keys
-                ));
-
-                // Show keyboard mapping status
-                ui.label(format!(
-                    "Physical keyboard enabled: {}",
-                    self.keyboard_enabled
-                ));
-                ui.label(format!(
-                    "Active key timers: {}",
-                    self.key_press_timers.len()
-                ));
-            }
         });
     }
 }
