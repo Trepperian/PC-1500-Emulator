@@ -150,20 +150,6 @@ impl Pc1500 {
             }
         }
     }
-
-    // pub fn clear_display_memory(&mut self) {
-    //     for ind in 0..=0x4F {
-    //         let adr = 0x7600 + ind;
-    //         self.memory.standard_user_system_memory
-    //             [(adr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = 0;
-    //     }
-
-    //     for ind in 0..=0x4F {
-    //         let adr = 0x7700 + ind;
-    //         self.memory.standard_user_system_memory
-    //             [(adr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = 0;
-    //     }
-    // }
 }
 
 impl Default for MemoryBus {

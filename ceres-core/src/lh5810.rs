@@ -76,65 +76,14 @@ impl Lh5810 {
         self.irq = irq;
     }
 
-    // #define LH5810_PB7 ((lh5810.r_opb & 0x80) ? true : false)
     fn lh5810_pb7(&self) -> bool {
         (self.r_opb & 0x80) != 0
     }
 
-    // void CLH5810::ResetDivider()
-    // {
-    //    clockRateState=pPC->pTIMER->state;
-    // }
     fn reset_divider(&mut self, timer_state: usize) {
         self.clock_rate_state = timer_state;
     }
 
-    //  UINT8 GetReg(LH5810_REGS reg)
-    // {
-    //     UINT8 t = 0;
-
-    //     switch (reg)
-    //     {
-    //     case U:
-    //         return (lh5810.r_u);
-    //     case L:
-    //         return (lh5810.r_l);
-    //     case G:
-    //         return (lh5810.r_g);
-    //     case MSK:
-    //         t = (lh5810.r_msk);
-    //         if (IRQ)
-    //             t |= 0x10;
-    //         if (LH5810_PB7)
-    //             t |= 0x20;
-    //         if (SDI)
-    //             t |= 0x40;
-    //         if (CLI)
-    //             t |= 0x80;
-    //         return (t);
-    //     case IF:
-    //         t = (lh5810.r_if);
-    //         //						if (IRQ)	t|=0x01;
-    //         //						if (PB7)	t|=0x02;
-    //         //                    qWarning()<<"return IF="<<t;
-    //         return (t);
-    //     case DDA:
-    //         return (lh5810.r_dda);
-    //     case DDB:
-    //         return (lh5810.r_ddb);
-    //     case OPA:
-    //         return (lh5810.r_opa & (~lh5810.r_dda)); // OK
-    //     case OPB:
-    //         return (lh5810.r_opb & (~lh5810.r_ddb)); // OK
-    //     case OPC:
-    //         return (lh5810.r_opc);
-    //     case F:
-    //         return (lh5810.r_f);
-    //     default:
-    //         return (0);
-    //     }
-    //     return (0);
-    // }
     pub fn get_reg(&self, reg: Reg) -> u8 {
         match reg {
             Reg::RESET => self.reset,
@@ -166,56 +115,6 @@ impl Lh5810 {
             Reg::F => self.r_f,
         }
     }
-
-    // UINT8 SetReg(LH5810_REGS reg, UINT8 data)
-    // {
-    //     switch (reg)
-    //     {
-    //     case RESET:
-    //         ResetDivider();
-    //         return (lh5810.reset = data);
-    //         break;
-    //     case U:
-    //         return (lh5810.r_u = data);
-    //         break;
-    //     case L:
-    //         New_L = true;
-    //         return (lh5810.r_l = data);
-    //         break;
-    //     case G:
-    //         New_G = true;
-    //         return (lh5810.r_g = data);
-    //         break;
-    //     case MSK:
-    //         return (lh5810.r_msk = data & 0x0F);
-    //         break;
-    //     case IF:
-    //         return (lh5810.r_if = ((lh5810.r_if & 0xFC) | (data & 0x03)));
-    //         break;
-    //     case DDA:
-    //         return (lh5810.r_dda = data);
-    //         break;
-    //     case DDB:
-    //         return (lh5810.r_ddb = data);
-    //         break;
-    //     case OPA:
-    //         return (lh5810.r_opa = ((lh5810.r_opa & (~lh5810.r_dda)) | (data & (lh5810.r_dda))));
-    //         break;
-    //     case OPB:
-    //         return (lh5810.r_opb = ((lh5810.r_opb & (~lh5810.r_ddb)) | (data & (lh5810.r_ddb))));
-    //         break;
-    //     case OPC:
-    //         New_OPC = true;
-    //         return (lh5810.r_opc = data);
-    //         break;
-    //     case F:
-    //         New_F = true;
-    //         return (lh5810.r_f = data);
-    //         break;
-    //     }
-
-    //     return (0);
-    // }
 
     pub fn set_reg(&mut self, reg: Reg, data: u8, timer_state: usize) {
         match reg {
@@ -255,93 +154,6 @@ impl Lh5810 {
         }
     }
 
-    //  UINT8 SetRegBit(LH5810_REGS reg, UINT8 bit, bool value)
-    //     {
-    //         if (value)
-    //         {
-    //             switch (reg)
-    //             {
-    //             case U:
-    //                 return (lh5810.r_u |= (0x01 << bit));
-    //                 break;
-    //             case L:
-    //                 return (lh5810.r_l |= (0x01 << bit));
-    //                 break;
-    //             case G:
-    //                 return (lh5810.r_g |= (0x01 << bit));
-    //                 break;
-    //             case MSK:
-    //                 return (lh5810.r_msk |= (0x01 << bit));
-    //                 break;
-    //             case IF:
-    //                 return (lh5810.r_if |= (0x01 << bit));
-    //                 break;
-    //             case DDA:
-    //                 return (lh5810.r_dda |= (0x01 << bit));
-    //                 break;
-    //             case DDB:
-    //                 return (lh5810.r_ddb |= (0x01 << bit));
-    //                 break;
-    //             case OPA:
-    //                 return (lh5810.r_opa |= (0x01 << bit));
-    //                 break;
-    //             case OPB:
-    //                 return (lh5810.r_opb |= (0x01 << bit));
-    //                 break;
-    //             case OPC:
-    //                 New_OPC = true;
-    //                 return (lh5810.r_opc |= (0x01 << bit));
-    //                 break;
-    //             case F:
-    //                 return (lh5810.r_f |= (0x01 << bit));
-    //                 break;
-    //             default:
-    //                 break;
-    //             }
-    //         }
-    //         else
-    //         {
-    //             switch (reg)
-    //             {
-    //             case U:
-    //                 return (lh5810.r_u &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case L:
-    //                 return (lh5810.r_l &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case G:
-    //                 return (lh5810.r_g &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case MSK:
-    //                 return (lh5810.r_msk &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case IF:
-    //                 return (lh5810.r_if &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case DDA:
-    //                 return (lh5810.r_dda &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case DDB:
-    //                 return (lh5810.r_ddb &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case OPA:
-    //                 return (lh5810.r_opa &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case OPB:
-    //                 return (lh5810.r_opb &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case OPC:
-    //                 return (lh5810.r_opc &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             case F:
-    //                 return (lh5810.r_f &= ((0x01 << bit) ^ 0xff));
-    //                 break;
-    //             default:
-    //                 break;
-    //             }
-    //         }
-    //         return (0);
-    //     }
     pub fn set_reg_bit(&mut self, reg: Reg, bit: u8, value: bool) {
         if value {
             match reg {
@@ -379,19 +191,6 @@ impl Lh5810 {
         }
     }
 
-    //     CLH5810::CLH5810(CPObject *parent) : CPObject(parent) //[constructor]
-    // {
-    //     lh5810.r_g = lh5810.r_msk = lh5810.r_dda = lh5810.r_ddb = lh5810.r_opa = lh5810.r_opb = lh5810.r_opc = lh5810.r_f = 0;
-    //     lh5810.r_if = 0;
-    //     IRQ = INT = false;
-    //     SDO = SDI = CLI = false;
-    //     modulationSend = false;
-    //     New_L = false;
-    //     New_G = New_F = true;
-    //     RolReg = 0xffff;
-    //     clockOutput = false;
-    //     //	OPA=OPB=0;
-    // }
     pub fn new() -> Self {
         Self {
             new_g: true,
@@ -401,15 +200,6 @@ impl Lh5810 {
         }
     }
 
-    // void CLH5810::start_serial_transmit()
-    // {
-    //     RolReg = (0xff00 | lh5810.r_l) << 1;
-    //     //    bit = 0;
-    //     //    serialSend= true;
-    //     bitCount = 0;
-    //     lastPulseState = clockRateState = pPC->pTIMER->state;
-    //     //    qWarning()<<"New_L:"<<QString("%1").arg(lh5810.r_l,2,16,QChar('0'));
-    // }
     pub fn start_serial_transmit(&mut self, timer_state: usize) {
         self.rol_reg = (0xff00 | self.r_l as u16) << 1;
         self.bit_count = 0;
@@ -417,119 +207,6 @@ impl Lh5810 {
         self.clock_rate_state = timer_state;
     }
 
-    // bool CLH5810::step()
-    // {
-    //     INT = false;
-
-    //     if (New_F)
-    //     {
-    //         FX = lh5810.r_f & 0x07;
-    //         FY = (lh5810.r_f >> 3) & 0x07;
-    //         qWarning() << "Fx=" << FX << "   FY=" << FY << "  val=" << lh5810.r_f;
-    //         New_F = false;
-
-    //         modulationSend = (lh5810.r_f & 0x40);
-    //         bit = false;
-    //     }
-
-    //     if (modulationSend)
-    //     {
-    //         //        SetRegBit(IF,3,false);
-    //         bit = RolReg & 0x01;
-
-    //         quint64 waitState = (bit ? (0x40 << FX) : (0x40 << FY)) / 2;
-    //         if ((pPC->pTIMER->state - lastPulseState) >= waitState)
-    //         {
-    //             SDO = !SDO;
-    //             //            qWarning()<<"flip="<<(pPC->pTIMER->state - lastPulseState);
-    //             while ((pPC->pTIMER->state - lastPulseState) >= waitState)
-    //                 lastPulseState += waitState;
-    //         }
-    //     }
-
-    //     if (clockOutput)
-    //     {
-    //         if ((pPC->pTIMER->state - clockRateState) >= (clockRate / 1))
-    //         {
-    //             CLO = true;
-    //             bitCount++;
-    //             if (bitCount == 9)
-    //                 SetRegBit(IF, 3, true);
-
-    //             RolReg >>= 1;
-    //             RolReg |= 0x8000;
-
-    //             //            qWarning()<<"bit:"<<(RolReg & 0x01)<<"  delta="<<pPC->pTIMER->state - clockRateState;
-    //             while ((pPC->pTIMER->state - clockRateState) >= (clockRate / 1))
-    //                 clockRateState += clockRate / 1;
-    //         }
-    //         if (CLO &&
-    //             ((pPC->pTIMER->state - clockRateState) > (clockRate / 10)))
-    //         {
-    //             CLO = false;
-    //         }
-    //     }
-
-    //     if (New_G)
-    //     {
-    //         switch (lh5810.r_g & 0x07)
-    //         {
-    //         case 0x00:
-    //             clockRate = 1;
-    //             break;
-    //         case 0x01:
-    //             clockRate = 2;
-    //             break;
-    //         case 0x02:
-    //             clockRate = 128;
-    //             break;
-    //         case 0x03:
-    //             clockRate = 256;
-    //             break;
-    //         case 0x04:
-    //             clockRate = 512;
-    //             break;
-    //         case 0x05:
-    //             clockRate = 1024;
-    //             break;
-    //         case 0x06:
-    //             clockRate = 2048;
-    //             break;
-    //         case 0x07:
-    //             clockRate = 4096;
-    //             break;
-    //         }
-    //         clockRateWait = pPC->getfrequency() / clockRate;
-    //         //        qWarning()<<"G= "<<lh5810.r_g<<"   ClockRate set to :"<<clockRateWait;
-
-    //         clockOutput = lh5810.r_g & 0X10;
-    //         New_G = false;
-    //     }
-    //     // If the L register change, then TD flag of the IF register down
-    //     if (New_L)
-    //     {
-    //         // AddLog(LOG_TAPE,tr("L register change -> %1X").arg(lh5810.r_l,4,16,QChar('0')));
-    //         SetRegBit(IF, 3, false);
-    //         New_L = false;
-    //         if (modulationSend)
-    //             qWarning() << "Serial transmission in progress!!!";
-    //         start_serial_transmit();
-    //     }
-    //     if (IRQ)
-    //         lh5810.r_if |= 0x01;
-    //     if (LH5810_PB7)
-    //         lh5810.r_if |= 0x02;
-
-    //     if (
-    //         ((lh5810.r_msk & 0x01) && IRQ) ||
-    //         ((lh5810.r_msk & 0x02) && LH5810_PB7))
-    //     {
-    //         INT = true;
-    //         //        if (pPC->pCPU->fp_log) fprintf(pPC->pCPU->fp_log,"INT\n");
-    //     }
-
-    //     return (1);
-    // }
     pub fn step(&mut self, timer_state: usize) {
         self.int = false;
 
