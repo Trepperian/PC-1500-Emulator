@@ -121,17 +121,6 @@ impl Pc1500 {
         let addr = self.mirror_addresses(addr);
 
         match addr {
-            0x7600..0x764D | 0x7700..0x774D => {
-                // println!(
-                //     "Writing to display memory at {:04X} with pc: {:04X}, val: {:02X}",
-                //     addr,
-                //     self.lh5801.p(),
-                //     value
-                // );
-                self.memory.standard_user_system_memory
-                    [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
-            }
-
             STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
                 self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] =
                     value;

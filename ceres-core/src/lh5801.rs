@@ -322,7 +322,7 @@ impl Pc1500 {
                 0xE425 => println!("ISKEY_2"),
                 0xE42C => {
                     println!("KEY_2_ASCII");
-                    self.lh5801.print_insts = true;
+                    // self.lh5801.print_insts = true;
                 }
                 0xE430 => println!("KEY_2_ASCII_1"),
                 0xE441 => println!("KEY_2_ASCII_2"),
@@ -374,6 +374,10 @@ impl Pc1500 {
                 0xDDC8 => println!("LOAD_XREG"),
                 0xCE9F => println!("RSRV_MEM_START"),
                 0xCEAC => println!("RSRV_MEM_START_1"),
+                0xE4EB => {
+                    println!("BCMD_PRINT");
+                    self.lh5801.debug_messages = 0
+                }
                 _ => {
                     if self.lh5801.debug_messages < 1000 {
                         self.lh5801.debug_messages -= 1;
