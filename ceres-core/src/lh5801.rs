@@ -298,9 +298,13 @@ impl Pc1500 {
                 0xE413 => println!("AUTO_OFF_20"),
                 0xCA7A => println!("EDITOR"),
                 0xCA7D => println!("EDITOR_1"),
-                0xCAAE => println!("EDITOR_2"),
+                0xCAAE => {
+                    println!("EDITOR_2");
+                }
                 0xCADA => println!("EDITOR_3"),
-                0xCADF => println!("EDITOR_4"),
+                0xCADF => {
+                    println!("EDITOR_4");
+                }
                 0xCAE8 => {
                     println!("EDITOR_5");
                 }
@@ -318,7 +322,7 @@ impl Pc1500 {
                 0xE425 => println!("ISKEY_2"),
                 0xE42C => {
                     println!("KEY_2_ASCII");
-                    // self.lh5801.print_insts = true;
+                    self.lh5801.print_insts = true;
                 }
                 0xE430 => println!("KEY_2_ASCII_1"),
                 0xE441 => println!("KEY_2_ASCII_2"),
@@ -542,8 +546,7 @@ impl Pc1500 {
     fn add_generic<I: Into<i16>>(&mut self, left: I, right: I, carry: bool) -> u8 {
         let left = left.into();
         let right = right.into();
-        let carry_i16 = if carry { 1 } else { 0 };
-        let res = left + right + carry_i16;
+        let res = left + right + if carry { 1 } else { 0 };
 
         self.lh5801.t &= !(HF | VF | ZF | CF);
 
@@ -552,11 +555,11 @@ impl Pc1500 {
         let c = res & 0x100;
         self.set_carry_flag(c != 0);
 
-        if ((left & 0x0f) + (right & 0x0f) + carry_i16) & 0x10 != 0 {
+        if ((left & 0x0f) + (right & 0x0f) + if carry { 1 } else { 0 }) & 0x10 != 0 {
             self.set_half_carry_flag(true);
         }
 
-        let v = ((left & 0x7f) + (right & 0x7f) + carry_i16) & 0x80;
+        let v = ((left & 0x7f) + (right & 0x7f) + if carry { 1 } else { 0 }) & 0x80;
         if (c != 0 && v == 0) || (c == 0 && v != 0) {
             self.set_overflow_flag(true);
         }
@@ -589,14 +592,14 @@ impl Pc1500 {
     fn sbc(&mut self, data: u8) {
         self.lh5801.a = self.add_generic(
             self.lh5801.a as i16,
-            (data ^ 0xff) as i8 as i16,
+            (data ^ 0xff) as i16,
             self.get_carry_flag(),
         );
     }
 
     fn cpa(&mut self, a: u8, b: u8) {
         // We only care about flags
-        let _ = self.add_generic(a as i16, (b ^ 0xff) as i8 as i16, true);
+        let _ = self.add_generic(a as i16, (b ^ 0xff) as i16, true);
     }
 
     fn decimaladd_generic<I: Into<i16>>(&mut self, left: I, right: I, carry: bool) -> u8 {
@@ -622,7 +625,7 @@ impl Pc1500 {
     fn dcs(&mut self, data: u8) {
         self.lh5801.a = self.decimaladd_generic(
             self.lh5801.a as i16,
-            (data ^ 0xff) as i8 as i16,
+            (data ^ 0xff) as i16,
             self.get_carry_flag(),
         );
     }
@@ -1110,7 +1113,6 @@ impl Pc1500 {
                 self.add_state(14);
             }
             0x5e => {
-                panic!("P = X: {:4X}", self.lh5801.x);
                 self.jmp(self.lh5801.x);
                 self.add_state(11);
             }
@@ -1349,9 +1351,10 @@ impl Pc1500 {
 
         if self.lh5801.print_insts {
             println!(
-                "instruction: {:02X} at addr: {:04X}",
+                "instruction: {:02X} at addr: {:04X}. A = {:02X}",
                 oper,
-                self.lh5801.p - 1
+                self.lh5801.p - 1,
+                self.lh5801.a
             );
         }
 

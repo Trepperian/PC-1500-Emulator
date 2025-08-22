@@ -73,14 +73,14 @@ pub enum Key {
 #[derive(Debug)]
 pub struct Keyboard {
     ks: u8,
-    pressed_keys: [bool; 73],
+    pressed_keys: [bool; 68],
 }
 
 impl Keyboard {
     pub fn new() -> Self {
         Self {
             ks: 0,
-            pressed_keys: [false; 73],
+            pressed_keys: [false; 68],
         }
     }
 

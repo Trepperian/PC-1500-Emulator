@@ -234,9 +234,15 @@ impl Lh5810 {
             }
             Reg::MSK => self.r_msk = data & 0x0F,
             Reg::IF => self.r_if = (self.r_if & 0xFC) | (data & 0x03),
-            Reg::DDA => self.r_dda = data,
+            Reg::DDA => {
+                self.r_dda = data;
+                println!("set_reg DDA: {:02X}", self.r_dda);
+            }
             Reg::DDB => self.r_ddb = data,
-            Reg::OPA => self.r_opa = (self.r_opa & !self.r_dda) | (data & self.r_dda),
+            Reg::OPA => {
+                self.r_opa = (self.r_opa & !self.r_dda) | (data & self.r_dda);
+                println!("set_reg OPA: {:02X}", self.r_opa);
+            }
             Reg::OPB => self.r_opb = (self.r_opb & !self.r_ddb) | (data & self.r_ddb),
             Reg::OPC => {
                 self.new_opc = true;
