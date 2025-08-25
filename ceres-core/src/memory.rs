@@ -4,13 +4,13 @@ const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
 const INITIAL_VALUE: u8 = 0xFF;
 
-const STANDARD_USER_MEMORY_BEGIN: u32 = 0x3800;
-const STANDARD_USER_MEMORY_END: u32 = 0x47FF;
+const STANDARD_USER_MEMORY_BEGIN: u32 = 0x4000;
+const STANDARD_USER_MEMORY_END: u32 = 0x57FF;
 const STANDARD_USER_MEMORY_SIZE: usize =
     (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
-pub const STANDARD_USER_SYSTEM_MEMORY_BEGIN: u32 = 0x7600;
-const STANDARD_USER_SYSTEM_MEMORY_END: u32 = 0x7BFF;
+const STANDARD_USER_SYSTEM_MEMORY_BEGIN: u32 = 0x7600;
+const STANDARD_USER_SYSTEM_MEMORY_END: u32 = 0x7FFF;
 const STANDARD_USER_SYSTEM_MEMORY_SIZE: usize =
     (STANDARD_USER_SYSTEM_MEMORY_END - STANDARD_USER_SYSTEM_MEMORY_BEGIN + 1) as usize;
 
@@ -25,10 +25,32 @@ pub struct MemoryBus {
 
 impl MemoryBus {
     pub fn new() -> Self {
+        let mut standard_user_memory = [0; STANDARD_USER_MEMORY_SIZE];
+
+        const BATHYSCAP: &[u8] = include_bytes!("../../bathyscaph.bin");
+
+        // Copy from 0x40C5
+        standard_user_memory[0x40C5 - STANDARD_USER_MEMORY_BEGIN as usize
+            ..0x40C5 - STANDARD_USER_MEMORY_BEGIN as usize + BATHYSCAP.len()]
+            .copy_from_slice(&BATHYSCAP);
+
+        let mut standard_user_system_memory = [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE];
+
+        standard_user_system_memory[0x7861 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0x40;
+        standard_user_system_memory[0x7862 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0xC5;
+
+        standard_user_system_memory[0x7865 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0x40;
+        standard_user_system_memory[0x7866 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0xC5;
+
+        let end = 0x40C5 + BATHYSCAP.len() as u16;
+        let [end_high, end_low] = end.to_be_bytes();
+        standard_user_system_memory[0x7867 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_high;
+        standard_user_system_memory[0x7868 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_low;
+
         Self {
             rom: PC1500_ROM_BYTES,
-            standard_user_memory: [INITIAL_VALUE; STANDARD_USER_MEMORY_SIZE],
-            standard_user_system_memory: [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE],
+            standard_user_memory,
+            standard_user_system_memory,
         }
     }
 }
@@ -39,9 +61,9 @@ impl Pc1500 {
             return addr & 0x1FF | 0x7600;
         }
 
-        if addr >= 0x7C00 && addr <= 0x7FFF {
-            return addr - 0x400;
-        }
+        // if addr >= 0x7C00 && addr <= 0x7FFF {
+        //     return addr - 0x400;
+        // }
 
         addr
     }
@@ -73,7 +95,10 @@ impl Pc1500 {
             }
             ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
             // Unmapped
-            _ => INITIAL_VALUE,
+            _ => {
+                println!("Read from unmapped address: {:#06X}", addr);
+                INITIAL_VALUE
+            }
         }
     }
 
@@ -131,7 +156,9 @@ impl Pc1500 {
                 // ROM is read-only, ignore writes
             }
             // Unmapped
-            _ => {}
+            _ => {
+                println!("Write to unmapped address: {:#06X}", addr);
+            }
         }
     }
 }

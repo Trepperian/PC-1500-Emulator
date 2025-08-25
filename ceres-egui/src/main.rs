@@ -6,8 +6,7 @@ use pc1500_app::Pc1500App;
 fn main() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([800.0, 600.0])
-            .with_min_inner_size([600.0, 400.0])
+            .with_inner_size([1000.0, 500.0])
             .with_title("PC-1500 Emulator"),
         renderer: eframe::Renderer::Wgpu,
         vsync: true,

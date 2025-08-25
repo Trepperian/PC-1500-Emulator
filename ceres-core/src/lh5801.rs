@@ -2,7 +2,7 @@ use core::panic;
 
 use crate::Pc1500;
 
-const DO_DEBUG_ROM: bool = false;
+const DO_DEBUG_ROM: bool = true;
 
 const CF: u8 = 0x01;
 const IE: u8 = 0x02;
@@ -219,7 +219,7 @@ impl Pc1500 {
         self.lh5801.x = 0;
         self.lh5801.y = 0;
         self.lh5801.u = 0;
-        self.lh5801.s = 0x1000;
+        self.lh5801.s = 0;
         self.lh5801.is_halted = false;
         self.lh5801.ir0 = false;
         self.lh5801.ir1 = false;
@@ -243,9 +243,13 @@ impl Pc1500 {
                 0xC8B4 => println!("BCMD_RUN"),
                 0xC9E4 => println!("COLD_START"),
                 0xCFCC => println!("INIT_SYS_ADDR"),
+                0xCFD0 => println!("INIT_SYS_ADDR_1"),
+                0xCFD2 => println!("INIT_SYS_ADDR_2"),
+                0xCFEE => println!("INIT_SYS_ADDR_3"),
                 0xD02B => println!("INBUF_CLR_1"),
                 0xD030 => println!("INBUF_CLR_2"),
                 0xD0B4 => println!("PRG_SEARCH"),
+                0xD0BC => println!("PRG_SEARCH_1, X = {:4X}", self.lh5801.x),
                 0xDF63 => println!("IS_STRING"),
                 0xE000 => println!("RESET"),
                 0xE153 => println!("IO_INT"),
@@ -333,11 +337,11 @@ impl Pc1500 {
                 0xE451 => println!("CHK_BRK"),
                 0xE4A8 => println!("TOK_TABL_SRCH"),
                 0xE573 => println!("TIMER_MODE"),
-                0xEDEF => println!("GPRINT_OUT, A = {:02X}", self.lh5801.a()),
-                0xEDF6 => {
-                    println!("GPRINT_OUT_1, A = {:02X}", self.lh5801.a());
-                    // self.lh5801.print_insts = true;
-                }
+                // 0xEDEF => println!("GPRINT_OUT, A = {:02X}", self.lh5801.a()),
+                // 0xEDF6 => {
+                //     println!("GPRINT_OUT_1, A = {:02X}", self.lh5801.a());
+                //     // self.lh5801.print_insts = true;
+                // }
                 0xF5B5 => println!("BCMD_PI"),
                 0xF61B => println!("RAND_GEN_5"),
                 0xF729 => println!("XFER_SM_ARX2ARY"),
@@ -347,9 +351,9 @@ impl Pc1500 {
                 0xF79C => println!("ARX_SHL_4BITS"),
                 0xF7B0 => println!("SET_HB_XYREGS"),
                 0xF7CC => println!("ADD_SM_ARX_ARX"),
-                0xED4D => println!("CHAR_OUT"),
-                0xED57 => println!("CHAR_OUT_1"),
-                0xED5B => println!("CHAR_OUT_2"),
+                // 0xED4D => println!("CHAR_OUT"),
+                // 0xED57 => println!("CHAR_OUT_1"),
+                // 0xED5B => println!("CHAR_OUT_2"),
                 0xE9EB => {
                     println!("STATUS_CHK");
                 }
@@ -371,13 +375,104 @@ impl Pc1500 {
                 0xEA67 => println!("STATUS_CHK_14"),
                 0xE8CA => println!("PRGM_DISP"),
                 0xE8FF => println!("PRGM_DISP_4"),
-                0xDDC8 => println!("LOAD_XREG"),
+                0xDDC8 => println!("LOAD_XREG, X = {:4X}", self.lh5801.x),
                 0xCE9F => println!("RSRV_MEM_START"),
                 0xCEAC => println!("RSRV_MEM_START_1"),
                 0xE4EB => {
                     println!("BCMD_PRINT");
-                    self.lh5801.debug_messages = 0
+                    //
                 }
+                0xCC86 => {
+                    println!("FIND_LINE");
+                    // self.lh5801.debug_messages = 0;
+                }
+                0xCC8B => println!("FIND_LINE_1"),
+                0xCC8D => println!("FIND_LINE_2"),
+                0xCC96 => println!("FIND_LINE_3"),
+                0xCCA5 => println!("FIND_LINE_4"),
+                0xCCAF => println!("FIND_LINE_5"),
+                0xCCB5 => println!("FIND_LINE_6"),
+                0xCCB8 => println!("FIND_LINE_7"),
+                0xCCBA => println!("FIND_LINE_8"),
+                0xCCBD => println!("FIND_LINE_9"),
+                0xCCBF => println!("FIND_LINE_10"),
+                0xDFF3 => println!("STATUS_2_UREG"),
+                0xDFF5 => println!("STATUS_2_UREG_1"),
+                0xDFFA => println!("STATUS_1M2_UREG"),
+                0xDCE9 => println!("RTN_2_MAIN"),
+                0xDCF1 => println!("RTN_2_MAIN_1"),
+                0xDCF5 => println!("RTN_2_MAIN_2"),
+                0xDCF6 => println!("RTN_2_MAIN_3"),
+                0xDCF9 => println!("RTN_2_MAIN_4"),
+                0xDCC5 => println!("CHECK_AT_END"),
+                0xDCCD => println!("CHECK_AT_END_1"),
+                0xDF93 => println!("PRG_SA_2_XREG"),
+                0xDF9A => println!("PRG_SA_2_XREG_1"),
+                0xD8BC => println!("ADDR_2_UREG"),
+                0xDBCA => println!("ADDR_2_UREG_1"),
+                0xDFC4 => println!("STRBUF_2_ARX"),
+                0xDFC5 => println!("STRBUF_2_ARX_1"),
+                0xDFD6 => println!("STRBUF_2_ARX_2"),
+                0xDFD8 => println!("STRBUF_2_ARX_3"),
+                0xDFE1 => println!("STRBUF_2_ARX_4"),
+                0xDFE2 => println!("U_MINUS_X"),
+                0xDFED => println!("U_MINUS_X_1"),
+                0xDCD4 => println!("CHECK_CHAR_TOKEN"),
+                0xDCD5 => println!("CHECK_CHAR_TOKEN_1"),
+                0xDCDF => println!("CHECK_CHAR_TOKEN_2"),
+                0xDCE6 => println!("CHECK_CHAR_TOKEN_3"),
+                0xDCFD => println!("RTN_2_DA"),
+                0xDD01 => println!("RTN_2_DA_1"),
+                0xDD03 => println!("RTN_2_DA_2"),
+                0xDEE3 => {
+                    println!("PROC_STAT_2_MEM");
+                }
+                0xDEEB => println!("PROC_STAT_2_MEM_1"),
+                0xDEF2 => println!("PROC_STAT_2_MEM_2"),
+                0xDEF3 => println!("PROC_STAT_2_MEM_3"),
+                0xCF27 => {
+                    println!("PRGLINE_TDI");
+                    // self.lh5801.debug_messages = 0;
+                }
+                0xCF34 => println!("PRGLINE_TDI_1"),
+                0xCF5D => println!("PRGLINE_TDI_2"),
+                0xCF93 => println!("PRGLINE_TDI_3"),
+                0xCFB1 => println!("PRGLINE_TDI_4"),
+                0xCFB9 => println!("PRGLINE_TDI_5"),
+                0xCFC2 => println!("PRGLINE_TDI_6"),
+                0xCFC8 => println!("PRGLINE_TDI_7"),
+                0xD3D5 => println!("DEC_2_HEX"),
+                0xD3D9 => println!("DEC_2_HEX_1"),
+                0xD3FE => println!("DEC_2_HEX_2"),
+                0xD406 => println!("DEC_2_HEX_3"),
+                0xC001 => println!("SA_XREG_2RAM"),
+                0xCCDE => println!("INIT_IBUF_R"),
+                0xD2E0 => println!("LINE_SEARCH, U = {:4X}", self.lh5801.u),
+                0xD2E6 => println!("LINE_SEARCH_1, U = {:4X}", self.lh5801.u),
+                0xD2EA => println!("LINE_SEARCH_2"),
+                0xD2EC => println!("LINE_SEARCH_3"),
+                0xD2F2 => println!("LINE_SEARCH_4"),
+                0xD2FD => println!("LINE_SEARCH_5"),
+                0xD2FF => println!("LINE_SEARCH_6, X = {:4X}", self.lh5801.x),
+                0xD315 => println!("LINE_SEARCH_7"),
+                0xD31E => println!("LINE_SEARCH_8"),
+                0xD322 => println!("LINE_SEARCH_9"),
+                0xD327 => println!("LINE_SEARCH_10"),
+                0xD333 => println!("LINE_SEARCH_11"),
+                0xD341 => println!("LINE_SEARCH_12"),
+                0xD35B => println!("LINE_SEARCH_13"),
+                0xD35C => println!("LINE_SEARCH_14"),
+                0xD362 => println!("LINE_SEARCH_15"),
+                0xD36F => println!("LINE_SEARCH_16"),
+                0xCC48 => {
+                    println!("BTN_DOWN");
+                    // self.lh5801.debug_messages = 0;
+                }
+                0xCC38 => {
+                    println!("BTN_UP");
+                    // self.lh5801.debug_messages = 0;
+                }
+
                 _ => {
                     if self.lh5801.debug_messages < 1000 {
                         self.lh5801.debug_messages -= 1;
@@ -385,7 +480,7 @@ impl Pc1500 {
                 }
             }
 
-            if self.lh5801.debug_messages < 1000 && self.lh5801.debug_messages > 20 {
+            if self.lh5801.debug_messages < 1000 && self.lh5801.debug_messages > 200 {
                 panic!("Too many debug messages");
             }
         }
@@ -559,14 +654,11 @@ impl Pc1500 {
         let c = res & 0x100;
         self.set_carry_flag(c != 0);
 
-        if ((left & 0x0f) + (right & 0x0f) + if carry { 1 } else { 0 }) & 0x10 != 0 {
-            self.set_half_carry_flag(true);
-        }
+        let halfcarry = ((left & 0x0f) + (right & 0x0f) + if carry { 1 } else { 0 }) & 0x10 != 0;
+        self.set_half_carry_flag(halfcarry);
 
-        let v = ((left & 0x7f) + (right & 0x7f) + if carry { 1 } else { 0 }) & 0x80;
-        if (c != 0 && v == 0) || (c == 0 && v != 0) {
-            self.set_overflow_flag(true);
-        }
+        let overflow = ((left ^ res) & (right ^ res) & 0x80) != 0;
+        self.set_overflow_flag(overflow);
 
         res as u8
     }
@@ -665,9 +757,8 @@ impl Pc1500 {
 
     fn lde(&mut self, reg: u16) -> u16 {
         self.lh5801.a = self.cpu_readmem(reg);
-        let ret = reg.wrapping_sub(1);
         self.check_z(self.lh5801.a);
-        ret
+        reg.wrapping_sub(1)
     }
 
     fn sde(&mut self, reg: u16) -> u16 {
@@ -677,9 +768,8 @@ impl Pc1500 {
 
     fn lin(&mut self, reg: u16) -> u16 {
         self.lh5801.a = self.cpu_readmem(reg);
-        let ret = reg.wrapping_add(1);
         self.check_z(self.lh5801.a);
-        ret
+        reg.wrapping_add(1)
     }
 
     fn sin(&mut self, reg: u16) -> u16 {
@@ -1110,6 +1200,11 @@ impl Pc1500 {
                 self.add_state(14);
             }
             0x5e => {
+                // println!(
+                //     "Setting P to {:4X}, carry: {}",
+                //     self.lh5801.x(),
+                //     self.get_carry_flag()
+                // );
                 self.jmp(self.lh5801.x);
                 self.add_state(11);
             }

@@ -9,7 +9,6 @@ pub enum Key {
     D,
     Dot,
     Down,
-    DownArrow,
     E,
     Eight,
     Enter,
@@ -320,7 +319,7 @@ impl Keyboard {
             if self.pressed_keys[Key::B as usize] {
                 data |= 0x40;
             }
-            if self.pressed_keys[Key::DownArrow as usize] {
+            if self.pressed_keys[Key::Down as usize] {
                 data |= 0x80;
             }
         }
