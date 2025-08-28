@@ -11,16 +11,10 @@ version = "*"
 [dependencies.ceres-core]
 path = "../ceres-core"
 
-[dependencies.directories]
-version = "*"
-
 [dependencies.eframe]
 version = "*"
 default-features = false
 features = ["accesskit", "default_fonts", "wayland", "wgpu"]
-
-[dependencies.rfd]
-version = "*"
 
 [dependencies.wgpu]
 version = "*"

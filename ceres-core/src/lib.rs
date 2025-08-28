@@ -73,63 +73,10 @@ impl Pc1500 {
         self.keyboard.release(key);
     }
 
-    // #define READ_BIT(b,p)	( ((b)>>(p)) & 0x01 ? 1 :0 )
     fn read_bit(byte: u8, position: u8) -> bool {
         ((byte >> position) & 0x01) != 0
     }
 
-    // bool CLH5810_PC1500::step()
-    // {
-    //     Cpc15XX *pc1500 = (Cpc15XX *)pPC;
-
-    // 	////////////////////////////////////////////////////////////////////
-    // 	//	INT FROM connector to IRQ
-    // 	////////////////////////////////////////////////////////////////////
-    //     IRQ= ((CbusPc1500*)pc1500->bus)->getINT();
-
-    // 	////////////////////////////////////////////////////////////////////
-    // 	//	Send Data to PD1990AC -- TIMER
-    // 	////////////////////////////////////////////////////////////////////
-
-    //     if (New_OPC) {
-    //         UINT8 t = lh5810.r_opc;
-    //         pPD1990AC->Set_data(READ_BIT(t,0));		// PC0
-    //         pPD1990AC->Set_stb(READ_BIT(t,1));		// PC1
-    //         pPD1990AC->Set_clk(READ_BIT(t,2));		// PC2
-    //         pPD1990AC->Set_out_enable(READ_BIT(t,3));	// PC3
-    //         pPD1990AC->Set_c0(READ_BIT(t,3));			// PC3
-    //         pPD1990AC->Set_c1(READ_BIT(t,4));			// PC4
-    //         pPD1990AC->Set_c2(READ_BIT(t,5));			// PC5
-
-    //         pPD1990AC->step();
-    //         New_OPC = false;
-    //     }
-    // 	// PB5 = TP
-    // 	// PB6 = DATA
-    //     SetRegBit(OPB,5,pPD1990AC->Get_tp());
-    //     SetRegBit(OPB,6,pPD1990AC->Get_data());
-
-    // 	////////////////////////////////////////////////////////////////////
-    // 	//	ON/Break
-    // 	////////////////////////////////////////////////////////////////////
-    //     SetRegBit(OPB,7,pPC->pKEYB->Kon);
-
-    // 	////////////////////////////////////////////////////////////////////
-    // 	//	TAPE READER
-    // 	////////////////////////////////////////////////////////////////////
-    //     SetRegBit(OPB,2,((CbusPc1500*)pc1500->bus)->isCMTIN());
-    //     CLI = CLO;
-
-    //     SetRegBit(OPB,3,true);	// Export model vs domestic model
-    //     SetRegBit(OPB,4,false);	// PB4 to GND
-
-    // 	  //----------------------//
-    // 	 // Standard LH5810 STEP //
-    // 	//----------------------//
-    // 	CLH5810::step();
-
-    // 	return(1);
-    // }
     fn step(&mut self) {
         if self.lh5810.new_opc() {
             let t = self.lh5810.get_reg(lh5810::Reg::OPC);

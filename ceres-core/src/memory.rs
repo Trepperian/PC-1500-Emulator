@@ -51,6 +51,7 @@ impl MemoryBus {
         standard_user_system_memory[0x7868 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_low;
 
         standard_user_system_memory[0x79D0 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0;
+             standard_user_system_memory[0x79D0 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0;
 
         Self {
             rom: PC1500_ROM_BYTES,

@@ -2,7 +2,7 @@ use core::panic;
 
 use crate::Pc1500;
 
-const DO_DEBUG_ROM: bool = true;
+const DO_DEBUG_ROM: bool = false;
 
 const CF: u8 = 0x01;
 const IE: u8 = 0x02;
