@@ -9,6 +9,9 @@ license.workspace = true
 [dependencies]
 chrono = "*"
 
+[dev-dependencies]
+tempfile = "*"
+
 [lints.clippy]
 absolute_paths = "warn"
 alloc_instead_of_core = "warn"

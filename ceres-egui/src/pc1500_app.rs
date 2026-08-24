@@ -2,6 +2,7 @@ use ceres_core::Pc1500;
 use ceres_core::keyboard::Key as Pc1500Key;
 use eframe::egui;
 use std::collections::HashSet;
+use std::path::Path;
 
 pub struct Pc1500App {
     // CORE EMULATOR - The real PC-1500 system
@@ -22,11 +23,24 @@ pub struct Pc1500App {
 
     // PHYSICAL KEYBOARD MAPPING - Map PC keyboard to PC-1500 keys
     pc_to_pc1500_mapping: std::collections::HashMap<egui::Key, Pc1500Key>,
+
+    // LH5 LOADER - UI state for loading .lh5 files at runtime
+    lh5_path_input: String,
+    lh5_status: Option<String>,
 }
 
 impl Pc1500App {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let emulator = Pc1500::new();
+    pub fn new(_cc: &eframe::CreationContext<'_>, lh5_file: Option<&Path>) -> Self {
+        let mut emulator = Pc1500::new();
+
+        let lh5_status = if let Some(path) = lh5_file {
+            match emulator.load_lh5_file(path) {
+                Ok(()) => Some(format!("Cargado: {}", path.display())),
+                Err(e) => Some(format!("Error: {e}")),
+            }
+        } else {
+            None
+        };
 
         Self {
             emulator,
@@ -38,7 +52,17 @@ impl Pc1500App {
             display_scale: 6.0,
             symbol_states: [false; 14],
             pc_to_pc1500_mapping: Self::create_keyboard_mapping(),
+            lh5_path_input: String::new(),
+            lh5_status,
         }
+    }
+
+    /// Carga un archivo `.lh5` en el emulador y actualiza el mensaje de estado.
+    pub fn load_lh5(&mut self, path: &Path) {
+        self.lh5_status = match self.emulator.load_lh5_file(path) {
+            Ok(()) => Some(format!("Cargado: {}", path.display())),
+            Err(e) => Some(format!("Error: {e}")),
+        };
     }
 
     // Create keyboard mapping from PC keyboard to PC-1500 keys
@@ -398,6 +422,40 @@ impl Pc1500App {
             self.send_key_release(key);
         }
     }
+
+    fn render_lh5_loader(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label("Archivo .lh5:");
+
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.lh5_path_input)
+                        .hint_text("ruta/al/programa.lh5")
+                        .desired_width(300.0),
+                );
+
+                // Allow pressing Enter inside the text field to trigger loading
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let path = std::path::PathBuf::from(self.lh5_path_input.clone());
+                    self.load_lh5(&path);
+                }
+
+                if ui.button("Cargar").clicked() {
+                    let path = std::path::PathBuf::from(self.lh5_path_input.clone());
+                    self.load_lh5(&path);
+                }
+            });
+
+            if let Some(status) = &self.lh5_status {
+                let color = if status.starts_with("Error") {
+                    egui::Color32::RED
+                } else {
+                    egui::Color32::GREEN
+                };
+                ui.colored_label(color, status);
+            }
+        });
+    }
 }
 
 impl eframe::App for Pc1500App {
@@ -418,6 +476,11 @@ impl eframe::App for Pc1500App {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Main display
             self.render_main_display(ui);
+
+            ui.separator();
+
+            // LH5 loader panel
+            self.render_lh5_loader(ui);
 
             ui.separator();
 
