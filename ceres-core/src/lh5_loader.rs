@@ -35,7 +35,7 @@ impl std::fmt::Display for Lh5LoadError {
             Self::FileTooSmall => write!(f, "Archivo demasiado pequeño (< 4 bytes de header)"),
             Self::InvalidFormat => write!(f, "Formato inválido: longitud declarada no coincide con el tamaño real"),
             Self::CodeTooLarge => write!(f, "Código demasiado grande para la memoria de usuario"),
-            Self::InvalidLoadAddress => write!(f, "Dirección de carga inválida (debe ser 0x4000-0x57FF)"),
+            Self::InvalidLoadAddress => write!(f, "Dirección de carga inválida (debe ser 0x3800-0x5FFF)"),
         }
     }
 }
@@ -73,10 +73,12 @@ pub fn read_lh5_file(path: &Path) -> Result<(u16, Vec<u8>), Lh5LoadError> {
 /// Valida que una dirección de carga y un tamaño de código sean seguros
 /// para el mapa de memoria del PC-1500.
 ///
-/// Rango válido: `0x4000`–`0x57FF` (memoria de usuario estándar).
+/// Rango válido: `0x3800`–`0x5FFF` (memoria de usuario estándar con la
+/// expansión CE-155 de 8KB instalada — ver el comentario junto a
+/// `STANDARD_USER_MEMORY_BEGIN` en `memory.rs`).
 pub fn validate_load_parameters(load_address: u16, code_size: usize) -> Result<(), Lh5LoadError> {
-    const USER_MEMORY_START: u16 = 0x4000;
-    const USER_MEMORY_END: u16 = 0x57FF;
+    const USER_MEMORY_START: u16 = 0x3800;
+    const USER_MEMORY_END: u16 = 0x5FFF;
 
     if load_address < USER_MEMORY_START || load_address > USER_MEMORY_END {
         return Err(Lh5LoadError::InvalidLoadAddress);
@@ -136,6 +138,7 @@ mod tests {
     fn test_validate_valid() {
         assert!(validate_load_parameters(0x4000, 100).is_ok());
         assert!(validate_load_parameters(0x4800, 512).is_ok());
+        assert!(validate_load_parameters(0x3800, 100).is_ok());
     }
 
     #[test]
@@ -145,18 +148,18 @@ mod tests {
             Err(Lh5LoadError::InvalidLoadAddress)
         ));
         assert!(matches!(
-            validate_load_parameters(0x3800, 10),
+            validate_load_parameters(0x37FF, 10),
             Err(Lh5LoadError::InvalidLoadAddress)
         ));
     }
 
     #[test]
     fn test_validate_code_too_large() {
-        // Arranca en 0x4000 con 0x1800 bytes llega exactamente a 0x57FF (ok)
-        assert!(validate_load_parameters(0x4000, 0x1800).is_ok());
+        // Arranca en 0x3800 con 0x2800 bytes llega exactamente a 0x5FFF (ok)
+        assert!(validate_load_parameters(0x3800, 0x2800).is_ok());
         // Un byte extra ya desborda
         assert!(matches!(
-            validate_load_parameters(0x4000, 0x1801),
+            validate_load_parameters(0x3800, 0x2801),
             Err(Lh5LoadError::CodeTooLarge)
         ));
     }

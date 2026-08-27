@@ -17,8 +17,32 @@ use memory::MemoryBus;
 
 use crate::{lh5810::Lh5810, pd1990ac::Pd1990ac};
 
-pub const NANOS_PER_TICK: Duration = Duration::from_nanos(2600000 / 2);
+/// Nanosegundos reales por ciclo de máquina del LH5801, a partir del
+/// oscilador real de la PC-1500 (2.6MHz), dividido por 2 internamente por
+/// la propia CPU → ~1.3MHz efectivos. Antes esta constante existía con las
+/// unidades cambiadas (`Duration::from_nanos(2_600_000 / 2)` = 1.3ms, no
+/// ~769ns — un factor ~1690x) y, más importante, no la usaba nada en todo
+/// el repositorio: `step_frame()` (ver más abajo) es puramente un
+/// presupuesto de ciclos de CPU, sin ninguna noción de tiempo real. Ver
+/// `FRAME_DURATION`, que sí la usa.
+const NANOS_PER_TICK: u64 = 1_000_000_000 / (2_600_000 / 2);
+
 const TICKS_PER_FRAME: usize = 15000;
+
+/// Duración real (tiempo de reloj auténtico de la PC-1500, no tiempo de
+/// host) que representa una sola llamada a [`Pc1500::step_frame`]:
+/// `TICKS_PER_FRAME` ciclos de máquina reales del LH5801 a ~1.3MHz.
+///
+/// `step_frame()` en sí no sabe nada de tiempo real — es un bucle que
+/// corre hasta gastar exactamente `TICKS_PER_FRAME` ciclos, sin mirar el
+/// reloj. Antes de esta constante, la GUI (`ceres-egui::Pc1500App`)
+/// llamaba a `step_frame()` una vez por cada repintado de pantalla, y el
+/// repintado no estaba ritmado a ningún tiempo real tampoco (solo a
+/// `vsync`) — así que la velocidad de emulación quedaba atada a la tasa
+/// de refresco del monitor del usuario, no al hardware real de la
+/// PC-1500. Esta constante es lo que necesita cualquier consumidor para
+/// ritmar sus llamadas a `step_frame()` al tiempo real.
+pub const FRAME_DURATION: Duration = Duration::from_nanos(TICKS_PER_FRAME as u64 * NANOS_PER_TICK);
 
 pub struct Pc1500 {
     lh5801: Lh5801,
@@ -131,7 +155,7 @@ impl Pc1500 {
     /// # Errores
     /// Devuelve [`lh5_loader::Lh5LoadError`] si el archivo no existe, tiene
     /// formato inválido o la dirección de carga está fuera del rango de
-    /// memoria de usuario (`0x4000`–`0x57FF`).
+    /// memoria de usuario (`0x3800`–`0x5FFF`).
     pub fn load_lh5_file(&mut self, path: &Path) -> Result<(), lh5_loader::Lh5LoadError> {
         use lh5_loader::{read_lh5_file, validate_load_parameters};
 
@@ -155,8 +179,15 @@ impl Pc1500 {
         let start = load_address as usize;
         let end = start + machine_code.len();
 
-        // Escribir el código directamente en standard_user_memory
-        const MEM_BEGIN: usize = 0x4000;
+        // Escribir el código directamente en standard_user_memory. Debe
+        // coincidir con `STANDARD_USER_MEMORY_BEGIN` en `memory.rs` — no
+        // se reutiliza directamente porque esa constante es privada del
+        // módulo, pero `validate_load_parameters` ya garantiza arriba
+        // que `load_address` cae dentro de ese mismo rango, así que un
+        // desajuste aquí se notaría de inmediato (resta con overflow o
+        // índice fuera de rango) en vez de corromper memoria en
+        // silencio.
+        const MEM_BEGIN: usize = 0x3800;
         let offset = start - MEM_BEGIN;
         self.memory.standard_user_memory[offset..offset + machine_code.len()]
             .copy_from_slice(&machine_code);

@@ -4,8 +4,20 @@ const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
 const INITIAL_VALUE: u8 = 0xFF;
 
-const STANDARD_USER_MEMORY_BEGIN: u32 = 0x4000;
-const STANDARD_USER_MEMORY_END: u32 = 0x57FF;
+// Antes 0x4000-0x57FF (6144 bytes): esa era la RAM de usuario con la
+// expansión CE-151 (4KB) instalada — "STANDARD USER MEMORY (RAM) 2KB" en
+// 0x4000-0x47FF más "CE-151 (RAM) 4KB" en 0x4800-0x57FF, según el mapa de
+// memoria real del manual de la PC-1500. Ahora modela el CE-155 (8KB,
+// confirmado como módulo de expansión real de Sharp, alternativa al
+// CE-151 en el mismo slot): "CE-155 (RAM) 2KB" en 0x3800-0x3FFF, la
+// misma "STANDARD USER MEMORY 2KB" en el medio, y "CE-155 (RAM) 6KB" en
+// 0x4800-0x5FFF — 10240 bytes contiguos en total. El compilador no usa
+// 0x3800-0x40FF (sigue arrancando el código en 0x4100, ver
+// `start_address` en `Lh5801Backend::new`), así que el único cambio
+// efectivo desde su perspectiva es más techo por encima: `stack_top`
+// pasa de 0x57FF a 0x5FFF.
+const STANDARD_USER_MEMORY_BEGIN: u32 = 0x3800;
+const STANDARD_USER_MEMORY_END: u32 = 0x5FFF;
 const STANDARD_USER_MEMORY_SIZE: usize =
     (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
