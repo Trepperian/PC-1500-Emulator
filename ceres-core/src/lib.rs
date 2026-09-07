@@ -155,7 +155,7 @@ impl Pc1500 {
     /// # Errores
     /// Devuelve [`lh5_loader::Lh5LoadError`] si el archivo no existe, tiene
     /// formato inválido o la dirección de carga está fuera del rango de
-    /// memoria de usuario (`0x3800`–`0x5FFF`).
+    /// memoria de usuario (`0x0100`–`0x47FF`).
     pub fn load_lh5_file(&mut self, path: &Path) -> Result<(), lh5_loader::Lh5LoadError> {
         use lh5_loader::{read_lh5_file, validate_load_parameters};
 
@@ -187,13 +187,18 @@ impl Pc1500 {
         // desajuste aquí se notaría de inmediato (resta con overflow o
         // índice fuera de rango) en vez de corromper memoria en
         // silencio.
-        const MEM_BEGIN: usize = 0x3800;
+        const MEM_BEGIN: usize = 0x0100;
         let offset = start - MEM_BEGIN;
         self.memory.standard_user_memory[offset..offset + machine_code.len()]
             .copy_from_slice(&machine_code);
 
         // Apuntar el PC a la dirección de carga para que la CPU ejecute el código
         self.lh5801.set_pc(load_address);
+        // Si la CPU seguía parada (el programa anterior llegó a
+        // END/STOP), sacarla de HALT — si no, step_cpu() no ejecuta nada
+        // pese al PC ya apuntando al programa recién cargado (ver
+        // Lh5801::clear_halt).
+        self.lh5801.clear_halt();
 
         println!(
             "Archivo LH5 cargado: {} — 0x{:04X}..0x{:04X} ({} bytes), PC=0x{:04X}",

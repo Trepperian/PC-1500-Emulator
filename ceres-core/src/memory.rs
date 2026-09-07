@@ -4,20 +4,34 @@ const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
 const INITIAL_VALUE: u8 = 0xFF;
 
-// Antes 0x4000-0x57FF (6144 bytes): esa era la RAM de usuario con la
-// expansión CE-151 (4KB) instalada — "STANDARD USER MEMORY (RAM) 2KB" en
-// 0x4000-0x47FF más "CE-151 (RAM) 4KB" en 0x4800-0x57FF, según el mapa de
-// memoria real del manual de la PC-1500. Ahora modela el CE-155 (8KB,
-// confirmado como módulo de expansión real de Sharp, alternativa al
-// CE-151 en el mismo slot): "CE-155 (RAM) 2KB" en 0x3800-0x3FFF, la
-// misma "STANDARD USER MEMORY 2KB" en el medio, y "CE-155 (RAM) 6KB" en
-// 0x4800-0x5FFF — 10240 bytes contiguos en total. El compilador no usa
-// 0x3800-0x40FF (sigue arrancando el código en 0x4100, ver
-// `start_address` en `Lh5801Backend::new`), así que el único cambio
-// efectivo desde su perspectiva es más techo por encima: `stack_top`
-// pasa de 0x57FF a 0x5FFF.
-const STANDARD_USER_MEMORY_BEGIN: u32 = 0x3800;
-const STANDARD_USER_MEMORY_END: u32 = 0x5FFF;
+// Historial de expansiones de RAM modeladas (cada una sustituyó a la
+// anterior — son módulos reales de Sharp, mutuamente excluyentes, que
+// ocupan la MISMA ranura de expansión, no memoria adicional):
+//   - CE-151 (4KB): "STANDARD USER MEMORY (RAM) 2KB" en 0x4000-0x47FF
+//     más "CE-151 (RAM) 4KB" en 0x4800-0x57FF — 6144 bytes.
+//   - CE-155 (8KB): "CE-155 (RAM) 2KB" en 0x3800-0x3FFF, la misma
+//     "STANDARD USER MEMORY 2KB" en el medio, y "CE-155 (RAM) 6KB" en
+//     0x4800-0x5FFF — 10240 bytes.
+//   - CE-161 (16KB, actual): confirmado en 3 fuentes independientes
+//     (imagen del manual de servicio, `lhasm.c` — `{ "CE161", ..., 1,
+//     0x4000, 0, 0xE161 }`, "Add &4000 before RAM" — y coherencia
+//     aritmética con el mapa oficial): añade el módulo COMPLETO
+//     ANTES de la RAM estándar, no repartido a ambos lados como
+//     CE-155. Mapa real de servicio (para PC-1500 base, la única
+//     variante con ROM disponible en este proyecto — no existe volcado
+//     de ROM de PC-1500A):
+//       0000H-00FFH: ÁREA RESERVADA (RAM) — 256 bytes, NO usada por el
+//         compilador (decisión explícita: no se ha confirmado qué la
+//         usa en hardware real, y el coste de evitarla es marginal).
+//       0100H-3FFFH: CE-161 (RAM) — 16128 bytes utilizables.
+//       4000H-47FFH: STANDARD USER MEMORY (RAM) — 2048 bytes, la misma
+//         de siempre, inherente a la máquina base, no parte de ningún
+//         módulo de expansión.
+//       4800H-67FFH: NOT USED (según el mapa de servicio — no modelado).
+//     Total contiguo utilizable: 0x0100-0x47FF = 18176 bytes (frente a
+//     los 10240 de CE-155, +77.5%).
+const STANDARD_USER_MEMORY_BEGIN: u32 = 0x0100;
+const STANDARD_USER_MEMORY_END: u32 = 0x47FF;
 const STANDARD_USER_MEMORY_SIZE: usize =
     (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
@@ -41,23 +55,38 @@ impl MemoryBus {
 
         const BATHYSCAP: &[u8] = include_bytes!("../../bathyscaph.bin");
 
-        // Copy from 0x40C5
-        standard_user_memory[0x40C5 - STANDARD_USER_MEMORY_BEGIN as usize
-            ..0x40C5 - STANDARD_USER_MEMORY_BEGIN as usize + BATHYSCAP.len()]
-            .copy_from_slice(&BATHYSCAP);
+        // Dirección de carga del fixture histórico tokenizado. Antes
+        // `0x40C5` (elegida cuando `STANDARD_USER_MEMORY` llegaba hasta
+        // `0x5FFF` con CE-155, dejando ~8000 bytes de margen por
+        // encima) — con CE-161 el techo real bajó a `0x47FF`, dejando
+        // solo ~1850 bytes de margen desde `0x40C5`, insuficiente para
+        // programas tokenizados más grandes que bathyscaph.bin/
+        // bombing.bin (ej. donkeykong.bin, 1870 bytes, ya no cabía:
+        // panic real "range end index 18195 out of range for slice of
+        // length 18176"). Movida al mismo INICIO de la RAM de usuario
+        // (`STANDARD_USER_MEMORY_BEGIN`) para maximizar el margen
+        // disponible de cara a futuros programas del corpus, ahora que
+        // cargar el original tokenizado antes de comparar contra
+        // nuestro `.lh5` es la metodología estándar para cada programa
+        // nuevo que se pruebe.
+        const FIXTURE_LOAD_ADDR: u16 = STANDARD_USER_MEMORY_BEGIN as u16;
+
+        standard_user_memory[0..BATHYSCAP.len()].copy_from_slice(&BATHYSCAP);
 
         let mut standard_user_system_memory = [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE];
 
-        standard_user_system_memory[0x7861 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0x40;
-        standard_user_system_memory[0x7862 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0xC5;
+        let [addr_high, addr_low] = FIXTURE_LOAD_ADDR.to_be_bytes();
 
-        standard_user_system_memory[0x7865 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0x40;
-        standard_user_system_memory[0x7866 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0xC5;
+        standard_user_system_memory[0x7861 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
+        standard_user_system_memory[0x7862 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
 
-        standard_user_system_memory[0x7869 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0x40;
-        standard_user_system_memory[0x786A - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0xC5;
+        standard_user_system_memory[0x7865 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
+        standard_user_system_memory[0x7866 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
 
-        let end = 0x40C5 + BATHYSCAP.len() as u16;
+        standard_user_system_memory[0x7869 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
+        standard_user_system_memory[0x786A - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
+
+        let end = FIXTURE_LOAD_ADDR + BATHYSCAP.len() as u16;
         let [end_high, end_low] = end.to_be_bytes();
         standard_user_system_memory[0x7867 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_high;
         standard_user_system_memory[0x7868 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_low;

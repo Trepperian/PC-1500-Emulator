@@ -98,6 +98,22 @@ impl Lh5801 {
         self.p = pc;
     }
 
+    /// Saca la CPU de `HALT` sin tocar ningún otro registro — a
+    /// diferencia del reset completo (que también pone A/X/Y/U/S a 0 y
+    /// salta al vector de arranque `$FFFE`), esto es lo mínimo necesario
+    /// para que `step_cpu()` vuelva a ejecutar instrucciones tras cargar
+    /// un nuevo `.lh5` sobre una CPU que ya estaba parada (p.ej. el
+    /// programa anterior llegó a `END`/`STOP`) — `set_pc` por sí solo no
+    /// lo hacía: cambiaba dónde apunta `P`, pero `step_cpu()` sigue sin
+    /// avanzar nada mientras `is_halted` siga a `true`. Encontrado
+    /// escribiendo un test que carga el mismo `.lh5` dos veces seguidas
+    /// sobre el mismo `Pc1500` (el mismo patrón que "Cargar" en la GUI
+    /// sin pulsar "Reset" antes): la segunda carga nunca llegaba a
+    /// ejecutar ni una instrucción.
+    pub fn clear_halt(&mut self) {
+        self.is_halted = false;
+    }
+
     pub fn set_a(&mut self, a: u8) {
         self.a = a;
     }
