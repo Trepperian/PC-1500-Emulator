@@ -53,7 +53,7 @@ impl MemoryBus {
     pub fn new() -> Self {
         let mut standard_user_memory = [0; STANDARD_USER_MEMORY_SIZE];
 
-        const BATHYSCAP: &[u8] = include_bytes!("../../bathyscaph.bin");
+        const BATHYSCAP: &[u8] = include_bytes!("../../jackpot.bin");
 
         // Dirección de carga del fixture histórico tokenizado. Antes
         // `0x40C5` (elegida cuando `STANDARD_USER_MEMORY` llegaba hasta
