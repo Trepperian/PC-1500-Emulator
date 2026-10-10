@@ -35,7 +35,7 @@ impl std::fmt::Display for Lh5LoadError {
             Self::FileTooSmall => write!(f, "Archivo demasiado pequeño (< 4 bytes de header)"),
             Self::InvalidFormat => write!(f, "Formato inválido: longitud declarada no coincide con el tamaño real"),
             Self::CodeTooLarge => write!(f, "Código demasiado grande para la memoria de usuario"),
-            Self::InvalidLoadAddress => write!(f, "Dirección de carga inválida (debe ser 0x0100-0x47FF)"),
+            Self::InvalidLoadAddress => write!(f, "Dirección de carga fuera de la memoria de usuario (0x0100-0x47FF; 0x57FF en un PC-1500A)"),
         }
     }
 }
@@ -73,19 +73,19 @@ pub fn read_lh5_file(path: &Path) -> Result<(u16, Vec<u8>), Lh5LoadError> {
 /// Valida que una dirección de carga y un tamaño de código sean seguros
 /// para el mapa de memoria del PC-1500.
 ///
-/// Rango válido: `0x0100`–`0x47FF` (memoria de usuario estándar con la
-/// expansión CE-161 de 16KB instalada — ver el comentario junto a
-/// `STANDARD_USER_MEMORY_BEGIN` en `memory.rs`).
-pub fn validate_load_parameters(load_address: u16, code_size: usize) -> Result<(), Lh5LoadError> {
+/// Rango válido: `0x0100`–`user_memory_end` (memoria de usuario con la
+/// expansión CE-161 de 16KB instalada: `0x47FF` en un PC-1500, `0x57FF` en
+/// un PC-1500A — ver el comentario junto a `STANDARD_USER_MEMORY_BEGIN` en
+/// `memory.rs`).
+pub fn validate_load_parameters(load_address: u16, code_size: usize, user_memory_end: u16) -> Result<(), Lh5LoadError> {
     const USER_MEMORY_START: u16 = 0x0100;
-    const USER_MEMORY_END: u16 = 0x47FF;
 
-    if load_address < USER_MEMORY_START || load_address > USER_MEMORY_END {
+    if load_address < USER_MEMORY_START || load_address > user_memory_end {
         return Err(Lh5LoadError::InvalidLoadAddress);
     }
 
     let end_address = load_address as usize + code_size;
-    if end_address > USER_MEMORY_END as usize + 1 {
+    if end_address > user_memory_end as usize + 1 {
         return Err(Lh5LoadError::CodeTooLarge);
     }
 
@@ -136,9 +136,9 @@ mod tests {
 
     #[test]
     fn test_validate_valid() {
-        assert!(validate_load_parameters(0x0100, 100).is_ok());
-        assert!(validate_load_parameters(0x4000, 512).is_ok());
-        assert!(validate_load_parameters(0x4700, 100).is_ok());
+        assert!(validate_load_parameters(0x0100, 100, 0x47FF).is_ok());
+        assert!(validate_load_parameters(0x4000, 512, 0x47FF).is_ok());
+        assert!(validate_load_parameters(0x4700, 100, 0x47FF).is_ok());
     }
 
     #[test]
@@ -146,17 +146,17 @@ mod tests {
         // Por debajo del inicio real (0x0100, tras el área reservada
         // de 256 bytes del CE-161).
         assert!(matches!(
-            validate_load_parameters(0x0000, 10),
+            validate_load_parameters(0x0000, 10, 0x47FF),
             Err(Lh5LoadError::InvalidLoadAddress)
         ));
         assert!(matches!(
-            validate_load_parameters(0x00FF, 10),
+            validate_load_parameters(0x00FF, 10, 0x47FF),
             Err(Lh5LoadError::InvalidLoadAddress)
         ));
         // Por encima del final real (0x47FF, fin de la STANDARD USER
         // MEMORY incorporada — ya no hay CE-155 extendiendo hasta 0x5FFF).
         assert!(matches!(
-            validate_load_parameters(0x4800, 10),
+            validate_load_parameters(0x4800, 10, 0x47FF),
             Err(Lh5LoadError::InvalidLoadAddress)
         ));
     }
@@ -164,10 +164,25 @@ mod tests {
     #[test]
     fn test_validate_code_too_large() {
         // Arranca en 0x0100 con 0x4700 bytes llega exactamente a 0x47FF (ok)
-        assert!(validate_load_parameters(0x0100, 0x4700).is_ok());
+        assert!(validate_load_parameters(0x0100, 0x4700, 0x47FF).is_ok());
         // Un byte extra ya desborda
         assert!(matches!(
-            validate_load_parameters(0x0100, 0x4701),
+            validate_load_parameters(0x0100, 0x4701, 0x47FF),
+            Err(Lh5LoadError::CodeTooLarge)
+        ));
+    }
+
+    /// A PC-1500A has 4 KB more RAM: &4800-&57FF is user memory there.
+    #[test]
+    fn test_validate_pc1500a() {
+        assert!(validate_load_parameters(0x4800, 10, 0x57FF).is_ok());
+        assert!(validate_load_parameters(0x0100, 0x5700, 0x57FF).is_ok());
+        assert!(matches!(
+            validate_load_parameters(0x5800, 10, 0x57FF),
+            Err(Lh5LoadError::InvalidLoadAddress)
+        ));
+        assert!(matches!(
+            validate_load_parameters(0x0100, 0x5701, 0x57FF),
             Err(Lh5LoadError::CodeTooLarge)
         ));
     }

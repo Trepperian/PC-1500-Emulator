@@ -32,8 +32,13 @@ const INITIAL_VALUE: u8 = 0xFF;
 //     los 10240 de CE-155, +77.5%).
 const STANDARD_USER_MEMORY_BEGIN: u32 = 0x0100;
 const STANDARD_USER_MEMORY_END: u32 = 0x47FF;
+/// The PC-1500A has 4 KB more internal RAM, `&4000-&57FF` instead of
+/// `&4000-&47FF` (lhasm's `-m pc1500A`); with the CE-161 in front, user RAM
+/// is `&0100-&57FF`. The array is always this big; `user_memory_end` says
+/// how much of it the emulated model has.
+const PC1500A_USER_MEMORY_END: u32 = 0x57FF;
 const STANDARD_USER_MEMORY_SIZE: usize =
-    (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
+    (PC1500A_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
 const STANDARD_USER_SYSTEM_MEMORY_BEGIN: u32 = 0x7600;
 const STANDARD_USER_SYSTEM_MEMORY_END: u32 = 0x7FFF;
@@ -47,10 +52,23 @@ pub struct MemoryBus {
     pub rom: &'static [u8],
     pub standard_user_memory: [u8; STANDARD_USER_MEMORY_SIZE],
     pub standard_user_system_memory: [u8; STANDARD_USER_SYSTEM_MEMORY_SIZE],
+    /// Last address of user RAM: `&47FF` on a PC-1500, `&57FF` on a
+    /// PC-1500A. Beyond it, reads and writes behave as unmapped memory.
+    pub user_memory_end: u32,
 }
 
 impl MemoryBus {
+    /// Memory of a PC-1500 with the CE-161 expansion.
     pub fn new() -> Self {
+        Self::with_user_memory_end(STANDARD_USER_MEMORY_END)
+    }
+
+    /// Memory of a PC-1500A with the CE-161 expansion.
+    pub fn new_pc1500a() -> Self {
+        Self::with_user_memory_end(PC1500A_USER_MEMORY_END)
+    }
+
+    fn with_user_memory_end(user_memory_end: u32) -> Self {
         let mut standard_user_memory = [0; STANDARD_USER_MEMORY_SIZE];
 
         const BATHYSCAP: &[u8] = include_bytes!("../../labyrinthe.bin");
@@ -71,7 +89,18 @@ impl MemoryBus {
         // nuevo que se pruebe.
         const FIXTURE_LOAD_ADDR: u16 = STANDARD_USER_MEMORY_BEGIN as u16;
 
-        standard_user_memory[0..BATHYSCAP.len()].copy_from_slice(&BATHYSCAP);
+        // The ROM finds the end of a BASIC program by an `&FF` after its
+        // last line, and the end pointer (&7867) points at it. lhasm's
+        // `.bin` files do not include it, so it is added here; a file that
+        // already ends with it (the compiler's tokenized output) keeps its
+        // own. Without it, a program that runs past its last line stops
+        // with `ERROR 1`.
+        let program_len = match BATHYSCAP.last() {
+            Some(0xFF) => BATHYSCAP.len() - 1,
+            _ => BATHYSCAP.len(),
+        };
+        standard_user_memory[..program_len].copy_from_slice(&BATHYSCAP[..program_len]);
+        standard_user_memory[program_len] = 0xFF;
 
         let mut standard_user_system_memory = [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE];
 
@@ -86,7 +115,7 @@ impl MemoryBus {
         standard_user_system_memory[0x7869 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
         standard_user_system_memory[0x786A - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
 
-        let end = FIXTURE_LOAD_ADDR + BATHYSCAP.len() as u16;
+        let end = FIXTURE_LOAD_ADDR + program_len as u16;
         let [end_high, end_low] = end.to_be_bytes();
         standard_user_system_memory[0x7867 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_high;
         standard_user_system_memory[0x7868 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_low;
@@ -98,6 +127,7 @@ impl MemoryBus {
             rom: PC1500_ROM_BYTES,
             standard_user_memory,
             standard_user_system_memory,
+            user_memory_end,
         }
     }
 }
@@ -133,7 +163,7 @@ impl Pc1500 {
             0x1F00E => self.lh5810.get_reg(lh5810::Reg::OPA),
             0x1F00F => self.lh5810.get_reg(lh5810::Reg::OPB),
             // ME0
-            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
+            a if (STANDARD_USER_MEMORY_BEGIN..=self.memory.user_memory_end).contains(&a) => {
                 self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize]
             }
             STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
@@ -191,7 +221,7 @@ impl Pc1500 {
                 .lh5810
                 .set_reg(lh5810::Reg::OPB, value, self.lh5801.timer_state()),
             // ME0
-            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
+            a if (STANDARD_USER_MEMORY_BEGIN..=self.memory.user_memory_end).contains(&a) => {
                 self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] =
                     value;
             }

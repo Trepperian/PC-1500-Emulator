@@ -48,11 +48,14 @@ pub struct Pc1500App {
     /// un `update_emulator()` en la siguiente `update()`, incluso en
     /// pausa — para poder avanzar frame a frame durante un análisis.
     step_once: bool,
+    /// Emulating a PC-1500A (4 KB more RAM) instead of a PC-1500; kept when
+    /// the machine is reset.
+    pc1500a: bool,
 }
 
 impl Pc1500App {
-    pub fn new(_cc: &eframe::CreationContext<'_>, lh5_file: Option<&Path>) -> Self {
-        let mut emulator = Pc1500::new();
+    pub fn new(_cc: &eframe::CreationContext<'_>, lh5_file: Option<&Path>, pc1500a: bool) -> Self {
+        let mut emulator = Self::new_machine(pc1500a);
 
         let lh5_status = if let Some(path) = lh5_file {
             match emulator.load_lh5_file(path) {
@@ -79,7 +82,13 @@ impl Pc1500App {
             last_step_time: std::time::Instant::now(),
             paused: false,
             step_once: false,
+            pc1500a,
         }
+    }
+
+    /// A fresh machine of the model the app was started with.
+    fn new_machine(pc1500a: bool) -> Pc1500 {
+        if pc1500a { Pc1500::new_pc1500a() } else { Pc1500::new() }
     }
 
     /// Carga un archivo `.lh5` en el emulador y actualiza el mensaje de estado.
@@ -98,7 +107,7 @@ impl Pc1500App {
     /// y reabrir la aplicación entera (`Pc1500::new()` solo se llamaba una
     /// vez, al arrancar `Pc1500App`).
     pub fn reset(&mut self) {
-        self.emulator = Pc1500::new();
+        self.emulator = Self::new_machine(self.pc1500a);
         self.pressed_keys.clear();
         self.key_press_timers.clear();
         self.lh5_status = Some("Emulador reiniciado".to_string());

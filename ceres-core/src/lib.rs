@@ -54,11 +54,30 @@ pub struct Pc1500 {
 }
 
 impl Pc1500 {
+    /// A PC-1500 with the CE-161 expansion (user RAM `&0100-&47FF`).
     #[must_use]
     pub fn new() -> Self {
+        Self::with_memory(MemoryBus::new())
+    }
+
+    /// A PC-1500A with the CE-161 expansion: 4 KB more RAM, user RAM
+    /// `&0100-&57FF`. Same ROM (there is no PC-1500A dump; the ROM entry
+    /// points the compiler uses are identical in versions A01, A03 and A04).
+    #[must_use]
+    pub fn new_pc1500a() -> Self {
+        Self::with_memory(MemoryBus::new_pc1500a())
+    }
+
+    /// Last address of user RAM of the emulated model.
+    #[must_use]
+    pub fn user_memory_end(&self) -> u16 {
+        self.memory.user_memory_end as u16
+    }
+
+    fn with_memory(memory: MemoryBus) -> Self {
         Self {
             lh5801: Lh5801::new(),
-            memory: MemoryBus::new(),
+            memory,
             keyboard: Keyboard::new(),
             display: DisplayController::new(),
             lh5810: Lh5810::new(),
@@ -84,6 +103,15 @@ impl Pc1500 {
         while self.lh5801.get_ticks() - start_ticks < TICKS_PER_FRAME {
             self.run();
         }
+    }
+
+    /// Executes one CPU instruction together with the peripherals (timers,
+    /// keyboard strobe, interrupts): the unit of work `step_frame` repeats.
+    /// Lets a caller observe the machine between two instructions, e.g. a
+    /// test harness that hooks ROM routines by address, without losing the
+    /// hardware timing the ROM relies on (`step_cpu` alone skips it).
+    pub fn step_instruction(&mut self) {
+        self.run();
     }
 
     /// Acceso de solo lectura a la CPU LH5801, para inspeccionar registros
@@ -155,7 +183,7 @@ impl Pc1500 {
     /// # Errores
     /// Devuelve [`lh5_loader::Lh5LoadError`] si el archivo no existe, tiene
     /// formato inválido o la dirección de carga está fuera del rango de
-    /// memoria de usuario (`0x0100`–`0x47FF`).
+    /// memoria de usuario (`0x0100`–`0x47FF`, o `0x57FF` en un PC-1500A).
     pub fn load_lh5_file(&mut self, path: &Path) -> Result<(), lh5_loader::Lh5LoadError> {
         use lh5_loader::{read_lh5_file, validate_load_parameters};
 
@@ -174,7 +202,7 @@ impl Pc1500 {
         self.step_cpu();
 
         let (load_address, machine_code) = read_lh5_file(path)?;
-        validate_load_parameters(load_address, machine_code.len())?;
+        validate_load_parameters(load_address, machine_code.len(), self.user_memory_end())?;
 
         let start = load_address as usize;
         let end = start + machine_code.len();
