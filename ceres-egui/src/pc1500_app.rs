@@ -28,25 +28,25 @@ pub struct Pc1500App {
     lh5_path_input: String,
     lh5_status: Option<String>,
 
-    // TIMING / SPEED CONTROL - ver el comentario de `update()` para el
-    // porqué: sin esto, la emulación corría tan rápido como el host
-    // repintara la pantalla (vsync del monitor), no al ritmo real de la
-    // PC-1500 (~1.3MHz).
-    /// Multiplicador de velocidad: 1.0 = tiempo real de hardware (una
-    /// llamada a `step_frame()` cada `FRAME_DURATION` de reloj real), <1.0
-    /// más lento (p.ej. 0.1 = 10x más lento, para poder observar con
-    /// calma qué hace un programa), >1.0 más rápido.
+    // TIMING / SPEED CONTROL: see the comment of `update()` for why.
+    // Without it, the emulation ran as fast as the host repainted the
+    // screen (the monitor's vsync), not at the real PC-1500's pace
+    // (~1.3MHz).
+    /// Speed multiplier: 1.0 = the hardware's real time (one call to
+    /// `step_frame()` every `FRAME_DURATION` of real time), <1.0 slower
+    /// (e.g. 0.1 = 10x slower, to watch calmly what a program does), >1.0
+    /// faster.
     speed_multiplier: f64,
-    /// Instante de la última vez que se avanzó realmente el emulador
-    /// (`update_emulator()`), para decidir en la siguiente llamada a
-    /// `update()` si ya ha pasado suficiente tiempo real.
+    /// When the emulator last really moved on (`update_emulator()`), to
+    /// decide at the next call to `update()` whether enough real time has
+    /// passed.
     last_step_time: std::time::Instant,
-    /// Si está en pausa, `update()` nunca avanza el emulador por sí solo
-    /// — solo lo hace `step_once` al pulsar el botón de paso.
+    /// When paused, `update()` never moves the emulator on by itself; only
+    /// `step_once` does, when the step button is pressed.
     paused: bool,
-    /// Puesto a `true` por el botón "Paso" de la UI: fuerza exactamente
-    /// un `update_emulator()` en la siguiente `update()`, incluso en
-    /// pausa — para poder avanzar frame a frame durante un análisis.
+    /// Set to `true` by the UI's "Step" button: forces exactly one
+    /// `update_emulator()` at the next `update()`, even when paused, to move
+    /// on frame by frame while looking at something.
     step_once: bool,
     /// Emulating a PC-1500A (4 KB more RAM) instead of a PC-1500; kept when
     /// the machine is reset.
@@ -59,7 +59,7 @@ impl Pc1500App {
 
         let lh5_status = if let Some(path) = lh5_file {
             match emulator.load_lh5_file(path) {
-                Ok(()) => Some(format!("Cargado: {}", path.display())),
+                Ok(()) => Some(format!("Loaded: {}", path.display())),
                 Err(e) => Some(format!("Error: {e}")),
             }
         } else {
@@ -91,26 +91,25 @@ impl Pc1500App {
         if pc1500a { Pc1500::new_pc1500a() } else { Pc1500::new() }
     }
 
-    /// Carga un archivo `.lh5` en el emulador y actualiza el mensaje de estado.
+    /// Loads a `.lh5` file into the emulator and updates the status message.
     pub fn load_lh5(&mut self, path: &Path) {
         self.lh5_status = match self.emulator.load_lh5_file(path) {
-            Ok(()) => Some(format!("Cargado: {}", path.display())),
+            Ok(()) => Some(format!("Loaded: {}", path.display())),
             Err(e) => Some(format!("Error: {e}")),
         };
     }
 
-    /// Reinicia el emulador a un estado de arranque limpio (equivalente a
-    /// encenderlo de nuevo) — la única forma de volver al entorno BASIC
-    /// interactivo normal de la ROM tras cargar y ejecutar un `.lh5` de
-    /// código máquina nativo, que deja la CPU parada (`HALT`) sin volver
-    /// nunca al bucle de la ROM. Antes de esto, la única forma era cerrar
-    /// y reabrir la aplicación entera (`Pc1500::new()` solo se llamaba una
-    /// vez, al arrancar `Pc1500App`).
+    /// Restarts the emulator from a clean boot (the same as switching it on
+    /// again): the only way back to the ROM's normal interactive BASIC after
+    /// loading and running a `.lh5` of native machine code, which leaves the
+    /// CPU stopped (`HALT`) and never goes back to the ROM's loop. Before
+    /// this, the only way was to close and reopen the whole application
+    /// (`Pc1500::new()` was only called once, when `Pc1500App` started).
     pub fn reset(&mut self) {
         self.emulator = Self::new_machine(self.pc1500a);
         self.pressed_keys.clear();
         self.key_press_timers.clear();
-        self.lh5_status = Some("Emulador reiniciado".to_string());
+        self.lh5_status = Some("Emulator restarted".to_string());
         self.last_step_time = std::time::Instant::now();
     }
 
@@ -461,20 +460,17 @@ impl Pc1500App {
             }
         });
 
-        // SHIFT (y el resto de teclas modificadoras) no aparece nunca en
-        // `i.events` como un `Event::Key` propio — egui no tiene una
-        // variante `Key::Shift` (confirmado leyendo `egui::Key` en
-        // egui 0.33.3: el enum no incluye modificadores en absoluto), así
-        // que por más que se añadiera a `pc_to_pc1500_mapping` nunca
-        // dispararía nada ahí. El estado real de la tecla física se
-        // reporta aparte, en `i.modifiers` ("qué modificadores están
-        // pulsados al empezar el frame"). Se reafirma la pulsación cada
-        // frame mientras siga físicamente pulsada — igual que cualquier
-        // otra tecla, `send_key_press` es idempotente y reinicia el timer
-        // de auto-liberación a 150ms (`update_key_timers`), así que
-        // mantenerlo pulsado de verdad nunca lo deja soltarse solo, y en
-        // cuanto se suelta la tecla física deja de reafirmarse y se
-        // libera sola en el mismo plazo que el resto de teclas.
+        // SHIFT (and the other modifier keys) never shows in `i.events` as an
+        // `Event::Key` of its own: egui has no `Key::Shift` variant (checked
+        // reading `egui::Key` in egui 0.33.3: the enum has no modifiers at all),
+        // so adding it to `pc_to_pc1500_mapping` would never fire anything
+        // there. The physical key's real state comes separately, in
+        // `i.modifiers` ("which modifiers are held when the frame starts"). The
+        // press is repeated every frame while the key is held, as for any other
+        // key: `send_key_press` is idempotent and restarts the 150ms auto-release
+        // timer (`update_key_timers`), so holding it never lets it go by itself,
+        // and once the physical key is let go it stops being repeated and is
+        // released in the same time as the other keys.
         if ctx.input(|i| i.modifiers.shift) {
             self.send_key_press(Pc1500Key::Shift);
         }
@@ -495,20 +491,20 @@ impl Pc1500App {
         }
     }
 
-    /// Control de velocidad: pausa, paso a paso, y un slider de
-    /// multiplicador respecto al tiempo real de hardware (`1.00x`) — ver
-    /// el comentario de `speed_multiplier` y de `update()`.
+    /// Speed control: pause, step by step, and a slider for the multiplier
+    /// of the hardware's real time (`1.00x`); see the comments of
+    /// `speed_multiplier` and `update()`.
     fn render_speed_control(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                let pause_label = if self.paused { "▶ Reanudar" } else { "⏸ Pausa" };
+                let pause_label = if self.paused { "▶ Resume" } else { "⏸ Pause" };
                 if ui.button(pause_label).clicked() {
                     self.paused = !self.paused;
                 }
 
                 if ui
-                    .add_enabled(self.paused, egui::Button::new("⏭ Paso"))
-                    .on_hover_text("Avanzar exactamente un step_frame() (útil en pausa)")
+                    .add_enabled(self.paused, egui::Button::new("⏭ Step"))
+                    .on_hover_text("Run exactly one step_frame() (useful when paused)")
                     .clicked()
                 {
                     self.step_once = true;
@@ -516,7 +512,7 @@ impl Pc1500App {
 
                 ui.separator();
 
-                ui.label("Velocidad:");
+                ui.label("Speed:");
                 ui.add(
                     egui::Slider::new(&mut self.speed_multiplier, 0.02..=2.0)
                         .logarithmic(true)
@@ -524,11 +520,11 @@ impl Pc1500App {
                         .suffix("x"),
                 );
                 ui.label(format!(
-                    "({} tiempo real de hardware)",
+                    "({} the hardware's real time)",
                     if self.speed_multiplier < 0.999 {
-                        format!("{:.1}x más lento que", 1.0 / self.speed_multiplier)
+                        format!("{:.1}x slower than", 1.0 / self.speed_multiplier)
                     } else if self.speed_multiplier > 1.001 {
-                        format!("{:.1}x más rápido que", self.speed_multiplier)
+                        format!("{:.1}x faster than", self.speed_multiplier)
                     } else {
                         "=".to_string()
                     }
@@ -550,11 +546,11 @@ impl Pc1500App {
     fn render_lh5_loader(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label("Archivo .lh5:");
+                ui.label(".lh5 file:");
 
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut self.lh5_path_input)
-                        .hint_text("ruta/al/programa.lh5")
+                        .hint_text("path/to/program.lh5")
                         .desired_width(300.0),
                 );
 
@@ -564,14 +560,14 @@ impl Pc1500App {
                     self.load_lh5(&path);
                 }
 
-                if ui.button("Cargar").clicked() {
+                if ui.button("Load").clicked() {
                     let path = std::path::PathBuf::from(self.lh5_path_input.clone());
                     self.load_lh5(&path);
                 }
 
                 if ui
                     .button("Reset")
-                    .on_hover_text("Reinicia el emulador a un arranque limpio (vuelve al entorno BASIC normal de la ROM)")
+                    .on_hover_text("Restarts the emulator from a clean boot (back to the ROM's normal BASIC)")
                     .clicked()
                 {
                     self.reset();
@@ -591,26 +587,22 @@ impl Pc1500App {
 }
 
 impl eframe::App for Pc1500App {
-    /// Antes esto llamaba a `update_emulator()` (que hace un `step_frame()`
-    /// = `TICKS_PER_FRAME` ciclos de CPU reales) una vez por cada
-    /// repintado, y pedía el siguiente repintado con
-    /// `ctx.request_repaint()` (tan pronto como sea posible) — sin ninguna
-    /// comprobación de tiempo real transcurrido. Como `step_frame()` es
-    /// puramente un presupuesto de ciclos (no sabe nada de reloj real), la
-    /// velocidad de emulación quedaba atada a la tasa de refresco del
-    /// monitor del host (60Hz, 120Hz, lo que sea `vsync` entregara), no al
-    /// hardware real de la PC-1500 — reproduciendo cualquier programa
-    /// (compilado o no) más rápido de lo que correría en una PC-1500 real.
+    /// This used to call `update_emulator()` (which does a `step_frame()`
+    /// = `TICKS_PER_FRAME` real CPU cycles) once per repaint, and asked for
+    /// the next repaint with `ctx.request_repaint()` (as soon as possible),
+    /// without checking how much real time had passed. As `step_frame()` is
+    /// only a budget of cycles (it knows nothing of real time), the
+    /// emulation's speed was tied to the host monitor's refresh rate (60Hz,
+    /// 120Hz, whatever `vsync` gave), not to the real PC-1500, running any
+    /// program (compiled or not) faster than it would on a real PC-1500.
     ///
-    /// Ahora se ritma contra tiempo real de verdad usando
-    /// `ceres_core::FRAME_DURATION` (cuánto tiempo real de hardware
-    /// representa una llamada a `step_frame()`), escalado por
-    /// `speed_multiplier` para poder ralentizar deliberadamente durante
-    /// una sesión de pruebas. Si aún no ha pasado suficiente tiempo real,
-    /// no se avanza el emulador y se pide el siguiente repintado
-    /// exactamente cuando haga falta (`request_repaint_after`) en vez de
-    /// pedirlo inmediatamente — evita quemar CPU con reflows de UI
-    /// inútiles entre pasos de emulación.
+    /// Now it is paced against real time with `ceres_core::FRAME_DURATION`
+    /// (how much real hardware time one call to `step_frame()` stands for),
+    /// scaled by `speed_multiplier` to slow it down on purpose while testing.
+    /// If not enough real time has passed yet, the emulator does not move on
+    /// and the next repaint is asked for exactly when it is due
+    /// (`request_repaint_after`) instead of at once, which saves burning CPU
+    /// on useless UI reflows between emulation steps.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle physical keyboard input FIRST
         self.handle_physical_keyboard(ctx);
@@ -642,7 +634,7 @@ impl eframe::App for Pc1500App {
 
             ui.separator();
 
-            // Control de velocidad (pausa/paso/multiplicador)
+            // Speed control (pause/step/multiplier)
             self.render_speed_control(ui);
 
             ui.separator();

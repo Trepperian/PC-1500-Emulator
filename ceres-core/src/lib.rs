@@ -17,31 +17,29 @@ use memory::MemoryBus;
 
 use crate::{lh5810::Lh5810, pd1990ac::Pd1990ac};
 
-/// Nanosegundos reales por ciclo de máquina del LH5801, a partir del
-/// oscilador real de la PC-1500 (2.6MHz), dividido por 2 internamente por
-/// la propia CPU → ~1.3MHz efectivos. Antes esta constante existía con las
-/// unidades cambiadas (`Duration::from_nanos(2_600_000 / 2)` = 1.3ms, no
-/// ~769ns — un factor ~1690x) y, más importante, no la usaba nada en todo
-/// el repositorio: `step_frame()` (ver más abajo) es puramente un
-/// presupuesto de ciclos de CPU, sin ninguna noción de tiempo real. Ver
-/// `FRAME_DURATION`, que sí la usa.
+/// Real nanoseconds per LH5801 machine cycle, from the PC-1500's real
+/// oscillator (2.6MHz), which the CPU divides by 2 inside: ~1.3MHz. This
+/// constant used to exist with the wrong units
+/// (`Duration::from_nanos(2_600_000 / 2)` = 1.3ms, not ~769ns, a factor of
+/// ~1690) and, worse, nothing in the repository used it: `step_frame()`
+/// (below) is only a budget of CPU cycles, with no idea of real time. See
+/// `FRAME_DURATION`, which does use it.
 const NANOS_PER_TICK: u64 = 1_000_000_000 / (2_600_000 / 2);
 
 const TICKS_PER_FRAME: usize = 15000;
 
-/// Duración real (tiempo de reloj auténtico de la PC-1500, no tiempo de
-/// host) que representa una sola llamada a [`Pc1500::step_frame`]:
-/// `TICKS_PER_FRAME` ciclos de máquina reales del LH5801 a ~1.3MHz.
+/// The real time (the PC-1500's own clock, not the host's) that one call
+/// to [`Pc1500::step_frame`] stands for: `TICKS_PER_FRAME` real LH5801
+/// machine cycles at ~1.3MHz.
 ///
-/// `step_frame()` en sí no sabe nada de tiempo real — es un bucle que
-/// corre hasta gastar exactamente `TICKS_PER_FRAME` ciclos, sin mirar el
-/// reloj. Antes de esta constante, la GUI (`ceres-egui::Pc1500App`)
-/// llamaba a `step_frame()` una vez por cada repintado de pantalla, y el
-/// repintado no estaba ritmado a ningún tiempo real tampoco (solo a
-/// `vsync`) — así que la velocidad de emulación quedaba atada a la tasa
-/// de refresco del monitor del usuario, no al hardware real de la
-/// PC-1500. Esta constante es lo que necesita cualquier consumidor para
-/// ritmar sus llamadas a `step_frame()` al tiempo real.
+/// `step_frame()` itself knows nothing of real time: it is a loop that
+/// runs until it has spent exactly `TICKS_PER_FRAME` cycles, without
+/// looking at the clock. Before this constant, the GUI
+/// (`ceres-egui::Pc1500App`) called `step_frame()` once per repaint, and
+/// the repaints were not paced to real time either (only to `vsync`), so
+/// the emulation's speed was tied to the user's monitor refresh rate, not
+/// to the real PC-1500. This constant is what any caller needs to pace its
+/// calls to `step_frame()` to real time.
 pub const FRAME_DURATION: Duration = Duration::from_nanos(TICKS_PER_FRAME as u64 * NANOS_PER_TICK);
 
 pub struct Pc1500 {
@@ -115,10 +113,9 @@ impl Pc1500 {
         self.run();
     }
 
-    /// Acceso de solo lectura a la CPU LH5801, para inspeccionar registros
-    /// (p. ej. desde un arnés de test que carga un `.lh5` y verifica el
-    /// estado resultante tras ejecutarlo con [`Pc1500::step_cpu`] /
-    /// [`Pc1500::read_byte`]).
+    /// Read-only access to the LH5801 CPU, to look at its registers (e.g.
+    /// from a test harness that loads a `.lh5` and checks the state it leaves
+    /// after running it with [`Pc1500::step_cpu`] / [`Pc1500::read_byte`]).
     #[must_use]
     pub fn cpu(&self) -> &Lh5801 {
         &self.lh5801
@@ -170,36 +167,33 @@ impl Pc1500 {
         self.lh5810.step(self.lh5801.timer_state());
     }
 
-    /// Carga un archivo de código máquina LH5801 (formato `.lh5`) en la
-    /// memoria de usuario del PC-1500 y configura el Program Counter para
-    /// empezar la ejecución desde la dirección de carga.
+    /// Loads a file of LH5801 machine code (the `.lh5` format) into the
+    /// PC-1500's user memory and sets the Program Counter to start running at
+    /// the load address.
     ///
-    /// # Formato del archivo
+    /// # The file
     /// ```text
-    /// bytes 0-1: dirección de carga (u16 little-endian)
-    /// bytes 2-3: longitud del código (u16 little-endian)
-    /// bytes 4+ : código máquina LH5801
+    /// bytes 0-1: the load address (u16 little-endian)
+    /// bytes 2-3: the length of the code (u16 little-endian)
+    /// bytes 4+ : the LH5801 machine code
     /// ```
     ///
-    /// # Errores
-    /// Devuelve [`lh5_loader::Lh5LoadError`] si el archivo no existe, tiene
-    /// formato inválido o la dirección de carga está fuera del rango de
-    /// memoria de usuario (`0x0100`–`0x47FF`, o `0x57FF` en un PC-1500A).
+    /// # Errors
+    /// Returns [`lh5_loader::Lh5LoadError`] if the file does not exist, its
+    /// format is wrong or the load address is outside user memory (`0x0100`-
+    /// `0x47FF`, or `0x57FF` on a PC-1500A).
     pub fn load_lh5_file(&mut self, path: &Path) -> Result<(), lh5_loader::Lh5LoadError> {
         use lh5_loader::{read_lh5_file, validate_load_parameters};
 
-        // Un `Pc1500` recién creado (`Pc1500::new()`) arranca con un reset
-        // de CPU pendiente (`reset_flag`): el PRIMER `step_cpu()` que se
-        // ejecute, sea cuando sea, lo consume saltando al vector de
-        // arranque real de la ROM ($FFFE) — machacando cualquier PC que
-        // hayamos fijado nosotros antes, incluido el que este método está
-        // a punto de fijar más abajo. Si nadie ha consumido ya ese reset
-        // (p. ej. llamando a `step_cpu()` una vez a mano, como hace el
-        // arnés de test del compilador), el programa cargado nunca llega
-        // a ejecutar ni una instrucción: se pierde en cuanto arranca el
-        // bucle de la GUI. Consumirlo aquí, dentro de la propia carga,
-        // hace que `load_lh5_file` sea seguro de llamar directamente
-        // desde `Pc1500::new()` sin que cada llamador tenga que saberlo.
+        // A new `Pc1500` (`Pc1500::new()`) starts with a CPU reset pending
+        // (`reset_flag`): the FIRST `step_cpu()`, whenever it runs, takes it by
+        // jumping to the ROM's real boot vector ($FFFE), overwriting any PC set
+        // before, including the one this method sets below. If nobody has taken
+        // that reset yet (e.g. by calling `step_cpu()` once by hand, as the
+        // compiler's test harness does), the program loaded never runs a single
+        // instruction: it is lost as soon as the GUI's loop starts. Taking it
+        // here, inside the load, makes `load_lh5_file` safe to call straight
+        // after `Pc1500::new()` without every caller having to know.
         self.step_cpu();
 
         let (load_address, machine_code) = read_lh5_file(path)?;
@@ -208,21 +202,20 @@ impl Pc1500 {
         let start = load_address as usize;
         let end = start + machine_code.len();
 
-        // Escribir el código directamente en standard_user_memory.
+        // Write the code straight into standard_user_memory.
         let offset = start - memory::STANDARD_USER_MEMORY_BEGIN as usize;
         self.memory.standard_user_memory[offset..offset + machine_code.len()]
             .copy_from_slice(&machine_code);
 
-        // Apuntar el PC a la dirección de carga para que la CPU ejecute el código
+        // Point PC at the load address so that the CPU runs the code
         self.lh5801.set_pc(load_address);
-        // Si la CPU seguía parada (el programa anterior llegó a
-        // END/STOP), sacarla de HALT — si no, step_cpu() no ejecuta nada
-        // pese al PC ya apuntando al programa recién cargado (ver
-        // Lh5801::clear_halt).
+        // If the CPU was still stopped (the previous program reached
+        // END/STOP), take it out of HALT; otherwise step_cpu() runs nothing
+        // even with PC at the program just loaded (see Lh5801::clear_halt).
         self.lh5801.clear_halt();
 
         println!(
-            "Archivo LH5 cargado: {} — 0x{:04X}..0x{:04X} ({} bytes), PC=0x{:04X}",
+            "LH5 file loaded: {} at 0x{:04X}..0x{:04X} ({} bytes), PC=0x{:04X}",
             path.display(),
             start,
             end - 1,

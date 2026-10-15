@@ -1,24 +1,24 @@
-//! Módulo para cargar archivos de código máquina LH5801 (.lh5)
+//! Loads files of LH5801 machine code (.lh5).
 //!
-//! Formato del archivo:
-//! - Bytes 0-1: Dirección de carga (u16, little-endian)
-//! - Bytes 2-3: Longitud del código (u16, little-endian)
-//! - Bytes 4+:  Código máquina LH5801 puro
+//! The file:
+//! - Bytes 0-1: the load address (u16, little-endian)
+//! - Bytes 2-3: the length of the code (u16, little-endian)
+//! - Bytes 4+:  the LH5801 machine code
 
 use std::{fs, io, path::Path};
 
-/// Errores al cargar archivos .lh5
+/// Errors loading .lh5 files
 #[derive(Debug)]
 pub enum Lh5LoadError {
-    /// Error de I/O al leer el archivo
+    /// An I/O error reading the file
     IoError(io::Error),
-    /// Archivo demasiado pequeño (< 4 bytes de header)
+    /// The file is too small (under the 4 bytes of the header)
     FileTooSmall,
-    /// Formato inválido (code_length no coincide con tamaño real)
+    /// The format is wrong (code_length is not the real size)
     InvalidFormat,
-    /// Código demasiado grande (excede memoria disponible)
+    /// The code is too big (more than the memory there is)
     CodeTooLarge,
-    /// Dirección de carga inválida (fuera del rango de memoria usuario)
+    /// The load address is wrong (outside user memory)
     InvalidLoadAddress,
 }
 
@@ -31,20 +31,20 @@ impl From<io::Error> for Lh5LoadError {
 impl std::fmt::Display for Lh5LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IoError(e) => write!(f, "Error I/O: {e}"),
-            Self::FileTooSmall => write!(f, "Archivo demasiado pequeño (< 4 bytes de header)"),
-            Self::InvalidFormat => write!(f, "Formato inválido: longitud declarada no coincide con el tamaño real"),
-            Self::CodeTooLarge => write!(f, "Código demasiado grande para la memoria de usuario"),
-            Self::InvalidLoadAddress => write!(f, "Dirección de carga fuera de la memoria de usuario (0x0100-0x47FF; 0x57FF en un PC-1500A)"),
+            Self::IoError(e) => write!(f, "I/O error: {e}"),
+            Self::FileTooSmall => write!(f, "The file is too small (under the 4 bytes of the header)"),
+            Self::InvalidFormat => write!(f, "Wrong format: the length declared is not the real size"),
+            Self::CodeTooLarge => write!(f, "The code is too big for user memory"),
+            Self::InvalidLoadAddress => write!(f, "The load address is outside user memory (0x0100-0x47FF; 0x57FF on a PC-1500A)"),
         }
     }
 }
 
 impl std::error::Error for Lh5LoadError {}
 
-/// Lee un archivo .lh5 y extrae la dirección de carga y el código máquina.
+/// Reads a .lh5 file and returns its load address and machine code.
 ///
-/// # Formato binario
+/// # The binary format
 /// ```text
 /// +--------+--------+--------+--------+------------------+
 /// | addr_L | addr_H | len_L  | len_H  | machine code ... |
@@ -70,13 +70,12 @@ pub fn read_lh5_file(path: &Path) -> Result<(u16, Vec<u8>), Lh5LoadError> {
     Ok((load_address, machine_code))
 }
 
-/// Valida que una dirección de carga y un tamaño de código sean seguros
-/// para el mapa de memoria del PC-1500.
+/// Checks that a load address and a code size fit the PC-1500's memory
+/// map.
 ///
-/// Rango válido: `0x0100`–`user_memory_end` (memoria de usuario con la
-/// expansión CE-161 de 16KB instalada: `0x47FF` en un PC-1500, `0x57FF` en
-/// un PC-1500A — ver el comentario junto a `STANDARD_USER_MEMORY_BEGIN` en
-/// `memory.rs`).
+/// The valid range is `0x0100`-`user_memory_end` (user memory with the 16 KB
+/// CE-161 expansion fitted: `0x47FF` on a PC-1500, `0x57FF` on a PC-1500A;
+/// see the comment by `STANDARD_USER_MEMORY_BEGIN` in `memory.rs`).
 pub fn validate_load_parameters(load_address: u16, code_size: usize, user_memory_end: u16) -> Result<(), Lh5LoadError> {
     const USER_MEMORY_START: u16 = 0x0100;
 
@@ -109,7 +108,7 @@ mod tests {
         let bytes = [
             0x00, 0x40, // load_address = 0x4000
             0x03, 0x00, // code_length = 3
-            0xB5, 0x42, 0xFD, // código
+            0xB5, 0x42, 0xFD, // code
         ];
         let f = write_tmp(&bytes);
         let (addr, code) = read_lh5_file(f.path()).unwrap();
@@ -128,7 +127,7 @@ mod tests {
         let bytes = [
             0x00, 0x40, // load_address = 0x4000
             0x0A, 0x00, // code_length = 10
-            0xB5, 0x42, 0xFD, // solo 3 bytes de código
+            0xB5, 0x42, 0xFD, // only 3 bytes of code
         ];
         let f = write_tmp(&bytes);
         assert!(matches!(read_lh5_file(f.path()), Err(Lh5LoadError::InvalidFormat)));
@@ -143,8 +142,8 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_address() {
-        // Por debajo del inicio real (0x0100, tras el área reservada
-        // de 256 bytes del CE-161).
+        // Below the real start (0x0100, after the CE-161's reserved area
+        // of 256 bytes).
         assert!(matches!(
             validate_load_parameters(0x0000, 10, 0x47FF),
             Err(Lh5LoadError::InvalidLoadAddress)
@@ -153,8 +152,8 @@ mod tests {
             validate_load_parameters(0x00FF, 10, 0x47FF),
             Err(Lh5LoadError::InvalidLoadAddress)
         ));
-        // Por encima del final real (0x47FF, fin de la STANDARD USER
-        // MEMORY incorporada — ya no hay CE-155 extendiendo hasta 0x5FFF).
+        // Above the real end (0x47FF, the end of the built-in STANDARD USER
+        // MEMORY; there is no CE-155 any more taking it up to 0x5FFF).
         assert!(matches!(
             validate_load_parameters(0x4800, 10, 0x47FF),
             Err(Lh5LoadError::InvalidLoadAddress)
@@ -163,9 +162,9 @@ mod tests {
 
     #[test]
     fn test_validate_code_too_large() {
-        // Arranca en 0x0100 con 0x4700 bytes llega exactamente a 0x47FF (ok)
+        // Starting at 0x0100, 0x4700 bytes reach exactly 0x47FF (ok)
         assert!(validate_load_parameters(0x0100, 0x4700, 0x47FF).is_ok());
-        // Un byte extra ya desborda
+        // One byte more overflows
         assert!(matches!(
             validate_load_parameters(0x0100, 0x4701, 0x47FF),
             Err(Lh5LoadError::CodeTooLarge)

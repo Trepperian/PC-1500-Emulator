@@ -4,34 +4,33 @@ const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
 const INITIAL_VALUE: u8 = 0xFF;
 
-// Historial de expansiones de RAM modeladas (cada una sustituyó a la
-// anterior — son módulos reales de Sharp, mutuamente excluyentes, que
-// ocupan la MISMA ranura de expansión, no memoria adicional):
-//   - CE-151 (4KB): "STANDARD USER MEMORY (RAM) 2KB" en 0x4000-0x47FF
-//     más "CE-151 (RAM) 4KB" en 0x4800-0x57FF — 6144 bytes.
-//   - CE-155 (8KB): "CE-155 (RAM) 2KB" en 0x3800-0x3FFF, la misma
-//     "STANDARD USER MEMORY 2KB" en el medio, y "CE-155 (RAM) 6KB" en
-//     0x4800-0x5FFF — 10240 bytes.
-//   - CE-161 (16KB, actual): confirmado en 3 fuentes independientes
-//     (imagen del manual de servicio, `lhasm.c` — `{ "CE161", ..., 1,
-//     0x4000, 0, 0xE161 }`, "Add &4000 before RAM" — y coherencia
-//     aritmética con el mapa oficial): añade el módulo COMPLETO
-//     ANTES de la RAM estándar, no repartido a ambos lados como
-//     CE-155. Mapa real de servicio (for the base PC-1500; the A04
-//     ROM in use is also the PC-1500A's, per the version table at the
-//     top of Jeff Birt's listing: "A04 = ROM2 - PC1500 = PC1500A = PC2"):
-//       0000H-00FFH: ÁREA RESERVADA (RAM) — 256 bytes of the CE-161
+// The RAM expansions modelled, each one replacing the one before (they
+// are real Sharp modules for the SAME expansion slot, so only one is ever
+// fitted; they do not add up):
+//   - CE-151 (4KB): "STANDARD USER MEMORY (RAM) 2KB" at 0x4000-0x47FF
+//     plus "CE-151 (RAM) 4KB" at 0x4800-0x57FF: 6144 bytes.
+//   - CE-155 (8KB): "CE-155 (RAM) 2KB" at 0x3800-0x3FFF, the same
+//     "STANDARD USER MEMORY 2KB" in the middle, and "CE-155 (RAM) 6KB" at
+//     0x4800-0x5FFF: 10240 bytes.
+//   - CE-161 (16KB, the current one), confirmed by 3 independent sources
+//     (the service manual's picture; `lhasm.c`, `{ "CE161", ..., 1,
+//     0x4000, 0, 0xE161 }`, "Add &4000 before RAM"; and the arithmetic of
+//     the official map): the WHOLE module goes BEFORE the standard RAM,
+//     not on both sides of it as the CE-155. The service manual's map (for
+//     the base PC-1500; the A04 ROM in use is also the PC-1500A's, per the
+//     version table at the top of Jeff Birt's listing: "A04 = ROM2 -
+//     PC1500 = PC1500A = PC2"):
+//       0000H-00FFH: RESERVED AREA (RAM), 256 bytes of the CE-161
 //         too. The ROM finds RAM from &0000 at boot, and after NEW0
 //         keeps its RESERVE area at &0008-&00C4 and BASIC's program from
 //         &00C5 (BCMD_NEW, $C80A: the RAM's first page + &C5). The
 //         compiled programs do not use it (they start at &0100).
-//       0100H-3FFFH: CE-161 (RAM) — 16128 bytes utilizables.
-//       4000H-47FFH: STANDARD USER MEMORY (RAM) — 2048 bytes, la misma
-//         de siempre, inherente a la máquina base, no parte de ningún
-//         módulo de expansión.
-//       4800H-67FFH: NOT USED (según el mapa de servicio — no modelado).
-//     Total contiguo utilizable: 0x0100-0x47FF = 18176 bytes (frente a
-//     los 10240 de CE-155, +77.5%).
+//       0100H-3FFFH: CE-161 (RAM), 16128 bytes for programs.
+//       4000H-47FFH: STANDARD USER MEMORY (RAM), 2048 bytes, the base
+//         machine's own, not part of any expansion module.
+//       4800H-67FFH: NOT USED (in the service map; not modelled).
+//     In one piece for programs: 0x0100-0x47FF = 18176 bytes (against the
+//     CE-155's 10240, +77.5%).
 /// First address of RAM: the CE-161 starts at &0000. It used to be &0100,
 /// so the ROM saw RAM from &0100 and put BASIC at &01C5 after NEW0.
 pub(crate) const STANDARD_USER_MEMORY_BEGIN: u32 = 0x0000;
@@ -83,20 +82,16 @@ impl MemoryBus {
 
         const BATHYSCAP: &[u8] = include_bytes!("../../labyrinthe.bin");
 
-        // Dirección de carga del fixture histórico tokenizado. Antes
-        // `0x40C5` (elegida cuando `STANDARD_USER_MEMORY` llegaba hasta
-        // `0x5FFF` con CE-155, dejando ~8000 bytes de margen por
-        // encima) — con CE-161 el techo real bajó a `0x47FF`, dejando
-        // solo ~1850 bytes de margen desde `0x40C5`, insuficiente para
-        // programas tokenizados más grandes que bathyscaph.bin/
-        // bombing.bin (ej. donkeykong.bin, 1870 bytes, ya no cabía:
-        // panic real "range end index 18195 out of range for slice of
-        // length 18176"). Movida al mismo INICIO de la RAM de usuario
-        // (`STANDARD_USER_MEMORY_BEGIN`) para maximizar el margen
-        // disponible de cara a futuros programas del corpus, ahora que
-        // cargar el original tokenizado antes de comparar contra
-        // nuestro `.lh5` es la metodología estándar para cada programa
-        // nuevo que se pruebe.
+        // Where the old tokenized fixture is loaded. It was `0x40C5` (chosen
+        // when `STANDARD_USER_MEMORY` went up to `0x5FFF` with the CE-155,
+        // leaving some 8000 bytes above it); with the CE-161 the top came down to
+        // `0x47FF`, which left only some 1850 bytes from `0x40C5`, too few for
+        // tokenized programs bigger than bathyscaph.bin and bombing.bin
+        // (donkeykong.bin, 1870 bytes, no longer fitted: a real panic "range end
+        // index 18195 out of range for slice of length 18176"). It is now at the
+        // start of the programs' RAM, to leave the most room for the corpus, now
+        // that running the tokenized original before comparing it with our `.lh5`
+        // is the standard method for each new program.
         const FIXTURE_LOAD_ADDR: u16 = 0x0100;
         let fixture_at = (FIXTURE_LOAD_ADDR as u32 - STANDARD_USER_MEMORY_BEGIN) as usize;
 
