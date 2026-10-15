@@ -1708,6 +1708,14 @@ impl Pc1500 {
             0x38 => {
                 self.add_state(5);
             }
+            // DEC VL (lhTools: `DEC N`). The 0x3x/0x7x rows work on a "V"
+            // register the LH5801 does not have, read as 0 as in 0x30-0x38
+            // above: only the flags change. The ROM runs it at the entry of
+            // STR$ ($D9CE), the second byte of CHR$'s `BCH $72` at $D9CD.
+            0x72 => {
+                self.dec(0);
+                self.add_state(5);
+            }
 
             0x40 => {
                 let inc = self.inc(self.lh5801.xl());

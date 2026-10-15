@@ -18,7 +18,9 @@ pub enum Symbol {
     Shift,
     Kana,
     Small,
-    Deg,
+    /// The angle mode's three segments: DE, G and RAD (see `update`).
+    De,
+    G,
     Rad,
     Run,
     Pro,
@@ -34,14 +36,14 @@ pub enum Symbol {
 pub struct DisplayController {
     /// RGBA buffer for GPU rendering
     rgba_buffer: [u8; RGBA_SIZE],
-    symbol_buffer: [bool; 14],
+    symbol_buffer: [bool; 15],
 }
 
 impl DisplayController {
     pub fn new() -> Self {
         Self {
             rgba_buffer: [0; RGBA_SIZE],
-            symbol_buffer: [false; 14],
+            symbol_buffer: [false; 15],
         }
     }
 
@@ -129,21 +131,28 @@ impl Pc1500 {
         let symb1 = self.read_byte(0x764E);
         let symb2 = self.read_byte(0x764F);
 
-        self.display.symbol_buffer[Symbol::Busy as usize] = (symb1 & 0x01) == 0;
-        self.display.symbol_buffer[Symbol::Shift as usize] = (symb1 & 0x02) == 0;
-        self.display.symbol_buffer[Symbol::Kana as usize] = (symb1 & 0x04) == 0;
-        self.display.symbol_buffer[Symbol::Small as usize] = (symb1 & 0x08) == 0;
-        self.display.symbol_buffer[Symbol::RomanIII as usize] = (symb1 & 0x10) == 0;
-        self.display.symbol_buffer[Symbol::RomanII as usize] = (symb1 & 0x20) == 0;
-        self.display.symbol_buffer[Symbol::RomanI as usize] = (symb1 & 0x40) == 0;
-        self.display.symbol_buffer[Symbol::Def as usize] = (symb1 & 0x80) == 0;
+        // A set bit lights its indicator: the ROM sets BUSY (bit 0 of
+        // &764E) while a program runs (CONT, $C8D5) and clears it to wait
+        // for a key ($CA88), and the bit of the mode it is in (&764F).
+        // They used to be drawn the other way round.
+        self.display.symbol_buffer[Symbol::Busy as usize] = (symb1 & 0x01) != 0;
+        self.display.symbol_buffer[Symbol::Shift as usize] = (symb1 & 0x02) != 0;
+        self.display.symbol_buffer[Symbol::Kana as usize] = (symb1 & 0x04) != 0;
+        self.display.symbol_buffer[Symbol::Small as usize] = (symb1 & 0x08) != 0;
+        self.display.symbol_buffer[Symbol::RomanIII as usize] = (symb1 & 0x10) != 0;
+        self.display.symbol_buffer[Symbol::RomanII as usize] = (symb1 & 0x20) != 0;
+        self.display.symbol_buffer[Symbol::RomanI as usize] = (symb1 & 0x40) != 0;
+        self.display.symbol_buffer[Symbol::Def as usize] = (symb1 & 0x80) != 0;
 
-        self.display.symbol_buffer[Symbol::Deg as usize] = (symb2 & 0x01) == 0;
-        self.display.symbol_buffer[Symbol::Rad as usize] = (symb2 & 0x02) == 0;
-        self.display.symbol_buffer[Symbol::Rad as usize] = (symb2 & 0x04) == 0;
-        self.display.symbol_buffer[Symbol::Reserve as usize] = (symb2 & 0x10) == 0;
-        self.display.symbol_buffer[Symbol::Pro as usize] = (symb2 & 0x20) == 0;
-        self.display.symbol_buffer[Symbol::Run as usize] = (symb2 & 0x40) == 0;
+        // The angle mode, in the low three bits of &764F (DEGREE puts 3,
+        // RADIAN 4 and GRAD 6: BCMD_DEGREE, $C697), lights the segments DE
+        // (bit 0), G (bit 1) and RAD (bit 2): DEG, RAD or GRAD.
+        self.display.symbol_buffer[Symbol::De as usize] = (symb2 & 0x01) != 0;
+        self.display.symbol_buffer[Symbol::G as usize] = (symb2 & 0x02) != 0;
+        self.display.symbol_buffer[Symbol::Rad as usize] = (symb2 & 0x04) != 0;
+        self.display.symbol_buffer[Symbol::Reserve as usize] = (symb2 & 0x10) != 0;
+        self.display.symbol_buffer[Symbol::Pro as usize] = (symb2 & 0x20) != 0;
+        self.display.symbol_buffer[Symbol::Run as usize] = (symb2 & 0x40) != 0;
 
         self.display.symbol_buffer[Symbol::Battery as usize] = true;
     }
@@ -152,5 +161,26 @@ impl Pc1500 {
 impl Default for DisplayController {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Symbol;
+    use crate::Pc1500;
+
+    /// After booting, the ROM waits for a key in PRO mode and DEGREE
+    /// (&764E = &40, &764F = &23): PRO and the DE and G segments (DEG) are
+    /// lit; RUN, RAD and BUSY are not.
+    #[test]
+    fn indicators_after_boot_are_pro_and_deg() {
+        let mut pc1500 = Pc1500::new();
+        for _ in 0..200 {
+            pc1500.step_frame();
+        }
+        let display = pc1500.display();
+        let lit = |symbol| display.is_symbol_on(symbol);
+        assert!(lit(Symbol::Pro) && lit(Symbol::De) && lit(Symbol::G));
+        assert!(!lit(Symbol::Run) && !lit(Symbol::Rad) && !lit(Symbol::Busy));
     }
 }

@@ -19,7 +19,7 @@ pub struct Pc1500App {
     display_scale: f32,
 
     // SYMBOL STATES - Cache for rendering
-    symbol_states: [bool; 14],
+    symbol_states: [bool; 15],
 
     // PHYSICAL KEYBOARD MAPPING - Map PC keyboard to PC-1500 keys
     pc_to_pc1500_mapping: std::collections::HashMap<egui::Key, Pc1500Key>,
@@ -74,7 +74,7 @@ impl Pc1500App {
             display_width: 156,
             display_height: 7,
             display_scale: 6.0,
-            symbol_states: [false; 14],
+            symbol_states: [false; 15],
             pc_to_pc1500_mapping: Self::create_keyboard_mapping(),
             lh5_path_input: String::new(),
             lh5_status,
@@ -209,7 +209,8 @@ impl Pc1500App {
         self.symbol_states[Symbol::Shift as usize] = display.is_symbol_on(Symbol::Shift);
         self.symbol_states[Symbol::Kana as usize] = display.is_symbol_on(Symbol::Kana);
         self.symbol_states[Symbol::Small as usize] = display.is_symbol_on(Symbol::Small);
-        self.symbol_states[Symbol::Deg as usize] = display.is_symbol_on(Symbol::Deg);
+        self.symbol_states[Symbol::De as usize] = display.is_symbol_on(Symbol::De);
+        self.symbol_states[Symbol::G as usize] = display.is_symbol_on(Symbol::G);
         self.symbol_states[Symbol::Rad as usize] = display.is_symbol_on(Symbol::Rad);
         self.symbol_states[Symbol::Run as usize] = display.is_symbol_on(Symbol::Run);
         self.symbol_states[Symbol::Pro as usize] = display.is_symbol_on(Symbol::Pro);
@@ -267,7 +268,8 @@ impl Pc1500App {
                 ("SHIFT", Symbol::Shift),
                 ("KANA", Symbol::Kana),
                 ("SML", Symbol::Small),
-                ("DEG", Symbol::Deg),
+                ("DE", Symbol::De),
+                ("G", Symbol::G),
                 ("RAD", Symbol::Rad),
                 ("RUN", Symbol::Run),
                 ("PRO", Symbol::Pro),
@@ -288,7 +290,10 @@ impl Pc1500App {
                 };
 
                 ui.colored_label(color, *label);
-                ui.add_space(15.0);
+                // DE, G and RAD are one word on the LCD: DEG, RAD or GRAD.
+                if !matches!(symbol, Symbol::De | Symbol::G) {
+                    ui.add_space(15.0);
+                }
             }
         });
     }

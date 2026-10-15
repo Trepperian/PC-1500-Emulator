@@ -61,8 +61,9 @@ impl Pc1500 {
     }
 
     /// A PC-1500A with the CE-161 expansion: 4 KB more RAM, user RAM
-    /// `&0100-&57FF`. Same ROM (there is no PC-1500A dump; the ROM entry
-    /// points the compiler uses are identical in versions A01, A03 and A04).
+    /// `&0100-&57FF`. Same ROM: A04 is the PC-1500A's ROM too (the version
+    /// table at the top of Jeff Birt's listing: "A04 = ROM2 - PC1500 =
+    /// PC1500A = PC2").
     #[must_use]
     pub fn new_pc1500a() -> Self {
         Self::with_memory(MemoryBus::new_pc1500a())
@@ -207,16 +208,8 @@ impl Pc1500 {
         let start = load_address as usize;
         let end = start + machine_code.len();
 
-        // Escribir el código directamente en standard_user_memory. Debe
-        // coincidir con `STANDARD_USER_MEMORY_BEGIN` en `memory.rs` — no
-        // se reutiliza directamente porque esa constante es privada del
-        // módulo, pero `validate_load_parameters` ya garantiza arriba
-        // que `load_address` cae dentro de ese mismo rango, así que un
-        // desajuste aquí se notaría de inmediato (resta con overflow o
-        // índice fuera de rango) en vez de corromper memoria en
-        // silencio.
-        const MEM_BEGIN: usize = 0x0100;
-        let offset = start - MEM_BEGIN;
+        // Escribir el código directamente en standard_user_memory.
+        let offset = start - memory::STANDARD_USER_MEMORY_BEGIN as usize;
         self.memory.standard_user_memory[offset..offset + machine_code.len()]
             .copy_from_slice(&machine_code);
 
