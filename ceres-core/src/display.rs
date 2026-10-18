@@ -167,6 +167,7 @@ impl Default for DisplayController {
 #[cfg(test)]
 mod tests {
     use super::Symbol;
+    use crate::keyboard::Key;
     use crate::Pc1500;
 
     /// After booting, the ROM waits for a key in PRO mode and DEGREE
@@ -182,5 +183,35 @@ mod tests {
         let lit = |symbol| display.is_symbol_on(symbol);
         assert!(lit(Symbol::Pro) && lit(Symbol::De) && lit(Symbol::G));
         assert!(!lit(Symbol::Run) && !lit(Symbol::Rad) && !lit(Symbol::Busy));
+    }
+
+    /// The cold start shows NEW0? :CHECK, and the ROM takes no key but CL
+    /// until it is cleared: MODE does nothing. After CL, MODE goes to RUN
+    /// mode (bit 6 of &764F, the one the ROM's RUN and GOTO need) and RUN
+    /// is lit, and a second MODE goes back to PRO.
+    #[test]
+    fn mode_works_after_cl_and_lights_run() {
+        let mut pc1500 = Pc1500::new();
+        for _ in 0..200 {
+            pc1500.step_frame();
+        }
+        // About as long as the window holds a key (150 ms) and a pause.
+        let type_key = |pc1500: &mut Pc1500, key| {
+            pc1500.press(key);
+            for _ in 0..15 {
+                pc1500.step_frame();
+            }
+            pc1500.release(key);
+            for _ in 0..40 {
+                pc1500.step_frame();
+            }
+            let display = pc1500.display();
+            (display.is_symbol_on(Symbol::Run), display.is_symbol_on(Symbol::Pro))
+        };
+        assert_eq!(type_key(&mut pc1500, Key::Mode), (false, true));
+        assert_eq!(type_key(&mut pc1500, Key::Cl), (false, true));
+        assert_eq!(type_key(&mut pc1500, Key::Mode), (true, false));
+        assert_eq!(pc1500.read_byte(0x764F) & 0x60, 0x40);
+        assert_eq!(type_key(&mut pc1500, Key::Mode), (false, true));
     }
 }

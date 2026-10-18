@@ -118,7 +118,7 @@ impl Pc1500App {
     fn basic_status(path: &Path, result: Result<(), ceres_core::basic_loader::BasicLoadError>) -> String {
         match result {
             Ok(()) => format!(
-                "BASIC loaded: {}. Press MODE (Tab) for RUN mode, then type RUN and Enter (or DEF and the program's label)",
+                "BASIC loaded: {}. Press CL (Backspace) to clear NEW0? :CHECK, MODE (Tab) for RUN mode, then type RUN and Enter (or DEF and the program's label)",
                 path.display()
             ),
             Err(e) => format!("Error: {e}"),
@@ -294,6 +294,15 @@ impl Pc1500App {
     fn render_symbols(&mut self, ui: &mut egui::Ui) {
         use ceres_core::display::Symbol;
 
+        // A lit indicator has the theme's strongest text color and an unlit
+        // one a dim grey, so they read right with a dark theme too (the
+        // default when the system uses one). They used to be black when lit
+        // and light grey when not: on a dark background the unlit ones were
+        // the ones that stood out, so RUN looked lit in PRO mode.
+        let visuals = ui.visuals();
+        let lit_color = visuals.strong_text_color();
+        let unlit_color = if visuals.dark_mode { egui::Color32::from_gray(80) } else { egui::Color32::from_gray(200) };
+
         ui.horizontal(|ui| {
             ui.add_space(20.0); // Align with display area
 
@@ -318,11 +327,7 @@ impl Pc1500App {
 
             for (label, symbol) in symbols.iter() {
                 let is_on = self.symbol_states[*symbol as usize];
-                let color = if is_on {
-                    egui::Color32::BLACK
-                } else {
-                    egui::Color32::LIGHT_GRAY
-                };
+                let color = if is_on { lit_color } else { unlit_color };
 
                 ui.colored_label(color, *label);
                 // DE, G and RAD are one word on the LCD: DEG, RAD or GRAD.

@@ -30,8 +30,9 @@ target/release/ceres-egui --pc1500a program.lh5     # the same on a PC-1500A (4 
 
 A BASIC program is a tokenized `.bin`: what `dull program.bas -o program.bin` writes (with its
 `@COM` header) or lhasm's (without one). It goes where the PC-1500 puts a program loaded after
-`NEW0`, `&00C5`. To run it, press MODE (Tab) for RUN mode, then type `RUN` and Enter, or DEF and the
-program's label if it starts at one.
+`NEW0`, `&00C5`. To run it, press CL (Backspace) to clear the `NEW0? :CHECK` the machine shows
+when it starts (until then it takes no other key: MODE does nothing), MODE (Tab) for RUN mode (RUN
+lit), then type `RUN` and Enter, or DEF and the program's label if it starts at one.
 
 User RAM is `&0000-&47FF` (`&57FF` on a PC-1500A); compiled programs load at the address in
 their `.lh5` header, `&0100` by default.
