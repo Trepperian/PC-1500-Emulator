@@ -20,7 +20,15 @@ fn main() -> anyhow::Result<()> {
             _ => lh5_file = Some(PathBuf::from(arg)),
         }
     }
-    let title = if pc1500a { "PC-1500A Emulator" } else { "PC-1500 Emulator" };
+    let app_name = if pc1500a { "PC-1500A Emulator" } else { "PC-1500 Emulator" };
+    // The window says what it was started with, to tell apart two windows
+    // run side by side (a program's BASIC original and its compiled code).
+    let file_name = |path: &PathBuf| path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let title = match (&basic_file, &lh5_file) {
+        (Some(path), _) => format!("{app_name} - {} (BASIC)", file_name(path)),
+        (None, Some(path)) => format!("{app_name} - {} (compiled)", file_name(path)),
+        (None, None) => app_name.to_string(),
+    };
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -35,7 +43,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     eframe::run_native(
-        title,
+        app_name,
         options,
         Box::new(move |cc| Ok(Box::new(Pc1500App::new(cc, lh5_file.as_deref(), basic_file.as_deref(), pc1500a)))),
     )
