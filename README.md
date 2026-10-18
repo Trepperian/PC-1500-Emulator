@@ -24,15 +24,21 @@ it the build stops with "couldn't read ... PC-1500_ROM-A04.bin".
 ```bash
 target/release/ceres-egui                           # BASIC, as when the machine is switched on
 target/release/ceres-egui program.lh5               # load a compiled program and run it
+target/release/ceres-egui --basic program.bin       # load a BASIC program, to run it with RUN
 target/release/ceres-egui --pc1500a program.lh5     # the same on a PC-1500A (4 KB more RAM)
 ```
+
+A BASIC program is a tokenized `.bin`: what `dull program.bas -o program.bin` writes (with its
+`@COM` header) or lhasm's (without one). It goes where the PC-1500 puts a program loaded after
+`NEW0`, `&00C5`. To run it, press MODE (Tab) for RUN mode, then type `RUN` and Enter, or DEF and the
+program's label if it starts at one.
 
 User RAM is `&0000-&47FF` (`&57FF` on a PC-1500A); compiled programs load at the address in
 their `.lh5` header, `&0100` by default.
 
 In the window:
-- **.lh5 file / Load** loads another program; **Reset** restarts the machine and goes back to
-  BASIC.
+- **File**, with **Load .lh5** for a compiled program or **Load BASIC** for a `.bin` (Enter in the
+  field picks by the extension); **Reset** restarts the machine and goes back to BASIC.
 - **Pause**, **Step** and **Speed** control the emulation: 1x is the real PC-1500's speed.
 
 ### Keyboard

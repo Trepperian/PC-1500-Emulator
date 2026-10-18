@@ -6,11 +6,20 @@ use eframe::egui;
 use pc1500_app::Pc1500App;
 
 fn main() -> anyhow::Result<()> {
-    // Arguments: an optional .lh5 file to load at start, and `--pc1500a`
-    // to emulate a PC-1500A (4 KB more RAM, &0100-&57FF with the CE-161).
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let pc1500a = args.iter().any(|arg| arg == "--pc1500a");
-    let lh5_file: Option<PathBuf> = args.iter().find(|arg| !arg.starts_with("--")).map(PathBuf::from);
+    // Arguments: an optional .lh5 file to load at start, `--basic file.bin`
+    // for a tokenized BASIC program instead, and `--pc1500a` to emulate a
+    // PC-1500A (4 KB more RAM, &0100-&57FF with the CE-161).
+    let mut pc1500a = false;
+    let mut lh5_file: Option<PathBuf> = None;
+    let mut basic_file: Option<PathBuf> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--pc1500a" => pc1500a = true,
+            "--basic" => basic_file = Some(PathBuf::from(args.next().ok_or_else(|| anyhow::anyhow!("--basic needs a file"))?)),
+            _ => lh5_file = Some(PathBuf::from(arg)),
+        }
+    }
     let title = if pc1500a { "PC-1500A Emulator" } else { "PC-1500 Emulator" };
 
     let options = eframe::NativeOptions {
@@ -28,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     eframe::run_native(
         title,
         options,
-        Box::new(move |cc| Ok(Box::new(Pc1500App::new(cc, lh5_file.as_deref(), pc1500a)))),
+        Box::new(move |cc| Ok(Box::new(Pc1500App::new(cc, lh5_file.as_deref(), basic_file.as_deref(), pc1500a)))),
     )
     .map_err(Into::into)
 }

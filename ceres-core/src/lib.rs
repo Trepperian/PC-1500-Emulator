@@ -1,3 +1,4 @@
+pub mod basic_loader;
 pub mod display;
 pub mod keyboard;
 pub mod lh5_loader;
@@ -223,6 +224,57 @@ impl Pc1500 {
             load_address,
         );
 
+        Ok(())
+    }
+
+    /// Loads a tokenized BASIC program (a `.bin` file, with or without the
+    /// `@COM` header; see [`basic_loader`]) as the program of the PC-1500's
+    /// own BASIC. Called on a new `Pc1500`, before it boots, as when a
+    /// program is loaded from tape after `NEW0`; then, in RUN mode, `RUN`
+    /// runs it.
+    pub fn load_basic_file(&mut self, path: &Path) -> Result<(), basic_loader::BasicLoadError> {
+        let (start, program) = basic_loader::read_basic_file(path)?;
+        self.load_basic_program(start, &program)?;
+        println!(
+            "BASIC program loaded: {} at 0x{:04X}..0x{:04X} ({} bytes)",
+            path.display(),
+            start,
+            start as usize + program.len() - 1,
+            program.len(),
+        );
+        Ok(())
+    }
+
+    /// The core of [`Pc1500::load_basic_file`]: user memory cleared from
+    /// `start` on, the program's lines there followed by the `&FF` end
+    /// marker, and the ROM's pointers to the program set (its start in RAM,
+    /// &7865; its end, &7867, at the marker; the start of editing, &7869;
+    /// and the start of a ROM module's program, &7861, the same as there is
+    /// none), as the emulator's own boot program has them.
+    pub fn load_basic_program(&mut self, start: u16, program: &[u8]) -> Result<(), basic_loader::BasicLoadError> {
+        let user_memory_end = self.user_memory_end() as u32;
+        if (start as u32) < memory::STANDARD_USER_MEMORY_BEGIN || start as u32 > user_memory_end {
+            return Err(basic_loader::BasicLoadError::InvalidStartAddress);
+        }
+        let end = start as u32 + program.len() as u32;
+        if end > user_memory_end {
+            return Err(basic_loader::BasicLoadError::TooBig);
+        }
+        for address in start as u32..=user_memory_end {
+            self.write_byte(address, 0);
+        }
+        for (offset, &byte) in program.iter().enumerate() {
+            self.write_byte(start as u32 + offset as u32, byte);
+        }
+        self.write_byte(end, 0xFF);
+        let [start_high, start_low] = start.to_be_bytes();
+        for (high, low) in [(0x7861, 0x7862), (0x7865, 0x7866), (0x7869, 0x786A)] {
+            self.write_byte(high, start_high);
+            self.write_byte(low, start_low);
+        }
+        let [end_high, end_low] = (end as u16).to_be_bytes();
+        self.write_byte(0x7867, end_high);
+        self.write_byte(0x7868, end_low);
         Ok(())
     }
 }

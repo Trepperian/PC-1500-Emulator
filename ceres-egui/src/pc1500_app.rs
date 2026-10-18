@@ -54,10 +54,17 @@ pub struct Pc1500App {
 }
 
 impl Pc1500App {
-    pub fn new(_cc: &eframe::CreationContext<'_>, lh5_file: Option<&Path>, pc1500a: bool) -> Self {
+    pub fn new(
+        _cc: &eframe::CreationContext<'_>,
+        lh5_file: Option<&Path>,
+        basic_file: Option<&Path>,
+        pc1500a: bool,
+    ) -> Self {
         let mut emulator = Self::new_machine(pc1500a);
 
-        let lh5_status = if let Some(path) = lh5_file {
+        let lh5_status = if let Some(path) = basic_file {
+            Some(Self::basic_status(path, emulator.load_basic_file(path)))
+        } else if let Some(path) = lh5_file {
             match emulator.load_lh5_file(path) {
                 Ok(()) => Some(format!("Loaded: {}", path.display())),
                 Err(e) => Some(format!("Error: {e}")),
@@ -97,6 +104,35 @@ impl Pc1500App {
             Ok(()) => Some(format!("Loaded: {}", path.display())),
             Err(e) => Some(format!("Error: {e}")),
         };
+    }
+
+    /// Restarts the machine with a tokenized BASIC program (a `.bin`, see
+    /// `ceres_core::basic_loader`) as its BASIC program, to run the original
+    /// of a program next to its compiled `.lh5`.
+    pub fn load_basic(&mut self, path: &Path) {
+        self.reset();
+        let result = self.emulator.load_basic_file(path);
+        self.lh5_status = Some(Self::basic_status(path, result));
+    }
+
+    fn basic_status(path: &Path, result: Result<(), ceres_core::basic_loader::BasicLoadError>) -> String {
+        match result {
+            Ok(()) => format!(
+                "BASIC loaded: {}. Press MODE (Tab) for RUN mode, then type RUN and Enter (or DEF and the program's label)",
+                path.display()
+            ),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Loads `path` by its kind: a `.lh5` as machine code, anything else as
+    /// a BASIC program.
+    fn load_by_extension(&mut self, path: &Path) {
+        if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("lh5")) {
+            self.load_lh5(path);
+        } else {
+            self.load_basic(path);
+        }
     }
 
     /// Restarts the emulator from a clean boot (the same as switching it on
@@ -546,23 +582,36 @@ impl Pc1500App {
     fn render_lh5_loader(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(".lh5 file:");
+                ui.label("File:");
 
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut self.lh5_path_input)
-                        .hint_text("path/to/program.lh5")
+                        .hint_text("program.lh5 (compiled) or program.bin (BASIC)")
                         .desired_width(300.0),
                 );
 
-                // Allow pressing Enter inside the text field to trigger loading
+                // Enter inside the text field loads the file, by its extension.
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let path = std::path::PathBuf::from(self.lh5_path_input.clone());
+                    self.load_by_extension(&path);
+                }
+
+                if ui
+                    .button("Load .lh5")
+                    .on_hover_text("Loads a compiled program (machine code) and runs it")
+                    .clicked()
+                {
                     let path = std::path::PathBuf::from(self.lh5_path_input.clone());
                     self.load_lh5(&path);
                 }
 
-                if ui.button("Load").clicked() {
+                if ui
+                    .button("Load BASIC")
+                    .on_hover_text("Restarts the machine with a tokenized BASIC program (.bin) as its program")
+                    .clicked()
+                {
                     let path = std::path::PathBuf::from(self.lh5_path_input.clone());
-                    self.load_lh5(&path);
+                    self.load_basic(&path);
                 }
 
                 if ui
