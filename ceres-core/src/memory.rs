@@ -1,42 +1,59 @@
-use crate::{Pc1500, lh5810};
+use crate::{Pc1500, host_io, lh5810};
 
-const PC1500_ROM_BYTES: &[u8] =
+pub(crate) const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
 const INITIAL_VALUE: u8 = 0xFF;
 
-// Historial de expansiones de RAM modeladas (cada una sustituyó a la
-// anterior — son módulos reales de Sharp, mutuamente excluyentes, que
-// ocupan la MISMA ranura de expansión, no memoria adicional):
-//   - CE-151 (4KB): "STANDARD USER MEMORY (RAM) 2KB" en 0x4000-0x47FF
-//     más "CE-151 (RAM) 4KB" en 0x4800-0x57FF — 6144 bytes.
-//   - CE-155 (8KB): "CE-155 (RAM) 2KB" en 0x3800-0x3FFF, la misma
-//     "STANDARD USER MEMORY 2KB" en el medio, y "CE-155 (RAM) 6KB" en
-//     0x4800-0x5FFF — 10240 bytes.
-//   - CE-161 (16KB, actual): confirmado en 3 fuentes independientes
-//     (imagen del manual de servicio, `lhasm.c` — `{ "CE161", ..., 1,
-//     0x4000, 0, 0xE161 }`, "Add &4000 before RAM" — y coherencia
-//     aritmética con el mapa oficial): añade el módulo COMPLETO
-//     ANTES de la RAM estándar, no repartido a ambos lados como
-//     CE-155. Mapa real de servicio (para PC-1500 base, la única
-//     variante con ROM disponible en este proyecto — no existe volcado
-//     de ROM de PC-1500A):
-//       0000H-00FFH: ÁREA RESERVADA (RAM) — 256 bytes, NO usada por el
-//         compilador (decisión explícita: no se ha confirmado qué la
-//         usa en hardware real, y el coste de evitarla es marginal).
-//       0100H-3FFFH: CE-161 (RAM) — 16128 bytes utilizables.
-//       4000H-47FFH: STANDARD USER MEMORY (RAM) — 2048 bytes, la misma
-//         de siempre, inherente a la máquina base, no parte de ningún
-//         módulo de expansión.
-//       4800H-67FFH: NOT USED (según el mapa de servicio — no modelado).
-//     Total contiguo utilizable: 0x0100-0x47FF = 18176 bytes (frente a
-//     los 10240 de CE-155, +77.5%).
-const STANDARD_USER_MEMORY_BEGIN: u32 = 0x0100;
+/// If `true`, every read or write of an unmapped address is announced on `stdout`. Off by default:
+/// the ROM's cold start probes memory that does not exist on purpose (RAM at $0000/$4800, expansion
+/// ROMs at $8000-$B800, CE-150/CE-158 peripherals at $1B00A/$1B00B/$1DC00...), and those ~30
+/// messages per boot only cluttered the output of the GUI and of the tests, besides writing to
+/// `stdout` (which blocks) from the CPU's hot loop. Set it to `true` only to debug the memory map.
+const LOG_UNMAPPED: bool = false;
+
+// The RAM expansions modelled, each one replacing the one before (they
+// are real Sharp modules for the SAME expansion slot, so only one is ever
+// fitted; they do not add up):
+//   - CE-151 (4KB): "STANDARD USER MEMORY (RAM) 2KB" at 0x4000-0x47FF
+//     plus "CE-151 (RAM) 4KB" at 0x4800-0x57FF: 6144 bytes.
+//   - CE-155 (8KB): "CE-155 (RAM) 2KB" at 0x3800-0x3FFF, the same
+//     "STANDARD USER MEMORY 2KB" in the middle, and "CE-155 (RAM) 6KB" at
+//     0x4800-0x5FFF: 10240 bytes.
+//   - CE-161 (16KB, the current one), confirmed by 3 independent sources
+//     (the service manual's picture; `lhasm.c`, `{ "CE161", ..., 1,
+//     0x4000, 0, 0xE161 }`, "Add &4000 before RAM"; and the arithmetic of
+//     the official map): the WHOLE module goes BEFORE the standard RAM,
+//     not on both sides of it as the CE-155. The service manual's map (for
+//     the base PC-1500; the A04 ROM in use is also the PC-1500A's, per the
+//     version table at the top of Jeff Birt's listing: "A04 = ROM2 -
+//     PC1500 = PC1500A = PC2"):
+//       0000H-00FFH: RESERVED AREA (RAM), 256 bytes of the CE-161
+//         too. The ROM finds RAM from &0000 at boot, and after NEW0
+//         keeps its RESERVE area at &0008-&00C4 and BASIC's program from
+//         &00C5 (BCMD_NEW, $C80A: the RAM's first page + &C5). The
+//         compiled programs do not use it (they start at &0100).
+//       0100H-3FFFH: CE-161 (RAM), 16128 bytes for programs.
+//       4000H-47FFH: STANDARD USER MEMORY (RAM), 2048 bytes, the base
+//         machine's own, not part of any expansion module.
+//       4800H-67FFH: NOT USED (in the service map; not modelled).
+//     In one piece for programs: 0x0100-0x47FF = 18176 bytes (against the
+//     CE-155's 10240, +77.5%).
+/// First address of RAM: the CE-161 starts at &0000. It used to be &0100,
+/// so the ROM saw RAM from &0100 and put BASIC at &01C5 after NEW0.
+pub(crate) const STANDARD_USER_MEMORY_BEGIN: u32 = 0x0000;
 const STANDARD_USER_MEMORY_END: u32 = 0x47FF;
+/// The PC-1500A has 4 KB more internal RAM, `&4000-&57FF` instead of
+/// `&4000-&47FF` (lhasm's `-m pc1500A`); with the CE-161 in front, user RAM
+/// is `&0100-&57FF`. The array is always this big; `user_memory_end` says
+/// how much of it the emulated model has.
+pub(crate) const PC1500A_USER_MEMORY_END: u32 = 0x57FF;
 const STANDARD_USER_MEMORY_SIZE: usize =
-    (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
+    (PC1500A_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
 const STANDARD_USER_SYSTEM_MEMORY_BEGIN: u32 = 0x7600;
 const STANDARD_USER_SYSTEM_MEMORY_END: u32 = 0x7FFF;
+/// End of the system RAM of a PC-1500 (see `MemoryBus::system_memory_end`).
+const PC1500_SYSTEM_MEMORY_END: u32 = 0x7BFF;
 const STANDARD_USER_SYSTEM_MEMORY_SIZE: usize =
     (STANDARD_USER_SYSTEM_MEMORY_END - STANDARD_USER_SYSTEM_MEMORY_BEGIN + 1) as usize;
 
@@ -47,31 +64,53 @@ pub struct MemoryBus {
     pub rom: &'static [u8],
     pub standard_user_memory: [u8; STANDARD_USER_MEMORY_SIZE],
     pub standard_user_system_memory: [u8; STANDARD_USER_SYSTEM_MEMORY_SIZE],
+    /// Last address of user RAM: `&47FF` on a PC-1500, `&57FF` on a
+    /// PC-1500A. Beyond it, reads and writes behave as unmapped memory.
+    pub user_memory_end: u32,
+    /// Last address of the system RAM: `&7BFF` on a PC-1500, whose ROM
+    /// uses nothing above its input buffer (&7BB0-&7BFF); `&7FFF` on a
+    /// PC-1500A, which lhasm gives an `LM` area at &7C01-&7FFF.
+    pub system_memory_end: u32,
 }
 
 impl MemoryBus {
+    /// Memory of a PC-1500 with the CE-161 expansion.
     pub fn new() -> Self {
+        Self::with_user_memory_end(STANDARD_USER_MEMORY_END)
+    }
+
+    /// Memory of a PC-1500A with the CE-161 expansion.
+    pub fn new_pc1500a() -> Self {
+        Self::with_user_memory_end(PC1500A_USER_MEMORY_END)
+    }
+
+    fn with_user_memory_end(user_memory_end: u32) -> Self {
         let mut standard_user_memory = [0; STANDARD_USER_MEMORY_SIZE];
 
-        const BATHYSCAP: &[u8] = include_bytes!("../../labyrinthe.bin");
+        const BOOT_PROGRAM: &[u8] = include_bytes!("../../bathyscaph.bin");
 
-        // Dirección de carga del fixture histórico tokenizado. Antes
-        // `0x40C5` (elegida cuando `STANDARD_USER_MEMORY` llegaba hasta
-        // `0x5FFF` con CE-155, dejando ~8000 bytes de margen por
-        // encima) — con CE-161 el techo real bajó a `0x47FF`, dejando
-        // solo ~1850 bytes de margen desde `0x40C5`, insuficiente para
-        // programas tokenizados más grandes que bathyscaph.bin/
-        // bombing.bin (ej. donkeykong.bin, 1870 bytes, ya no cabía:
-        // panic real "range end index 18195 out of range for slice of
-        // length 18176"). Movida al mismo INICIO de la RAM de usuario
-        // (`STANDARD_USER_MEMORY_BEGIN`) para maximizar el margen
-        // disponible de cara a futuros programas del corpus, ahora que
-        // cargar el original tokenizado antes de comparar contra
-        // nuestro `.lh5` es la metodología estándar para cada programa
-        // nuevo que se pruebe.
-        const FIXTURE_LOAD_ADDR: u16 = STANDARD_USER_MEMORY_BEGIN as u16;
+        // The BASIC program in RAM at power-on, only to have something to
+        // run while debugging (bathyscaph). It is where the ROM puts BASIC's
+        // program after `NEW0` with the CE-161 (`&00C5`, see
+        // `STANDARD_USER_MEMORY_BEGIN`), so a program loaded over it from
+        // the window (`Pc1500::load_basic_program`) also starts there, as
+        // on the real machine. It used to be `0x40C5` with the CE-155 and
+        // then `0x0100`.
+        const FIXTURE_LOAD_ADDR: u16 = 0x00C5;
+        let fixture_at = (FIXTURE_LOAD_ADDR as u32 - STANDARD_USER_MEMORY_BEGIN) as usize;
 
-        standard_user_memory[0..BATHYSCAP.len()].copy_from_slice(&BATHYSCAP);
+        // The ROM finds the end of a BASIC program by an `&FF` after its
+        // last line, and the end pointer (&7867) points at it. lhasm's
+        // `.bin` files do not include it, so it is added here; a file that
+        // already ends with it (the compiler's tokenized output) keeps its
+        // own. Without it, a program that runs past its last line stops
+        // with `ERROR 1`.
+        let program_len = match BOOT_PROGRAM.last() {
+            Some(0xFF) => BOOT_PROGRAM.len() - 1,
+            _ => BOOT_PROGRAM.len(),
+        };
+        standard_user_memory[fixture_at..fixture_at + program_len].copy_from_slice(&BOOT_PROGRAM[..program_len]);
+        standard_user_memory[fixture_at + program_len] = 0xFF;
 
         let mut standard_user_system_memory = [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE];
 
@@ -86,18 +125,24 @@ impl MemoryBus {
         standard_user_system_memory[0x7869 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
         standard_user_system_memory[0x786A - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
 
-        let end = FIXTURE_LOAD_ADDR + BATHYSCAP.len() as u16;
+        let end = FIXTURE_LOAD_ADDR + program_len as u16;
         let [end_high, end_low] = end.to_be_bytes();
         standard_user_system_memory[0x7867 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_high;
         standard_user_system_memory[0x7868 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_low;
 
         standard_user_system_memory[0x79D0 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0;
-             standard_user_system_memory[0x79D0 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0;
 
+        let system_memory_end = if user_memory_end == PC1500A_USER_MEMORY_END {
+            STANDARD_USER_SYSTEM_MEMORY_END
+        } else {
+            PC1500_SYSTEM_MEMORY_END
+        };
         Self {
             rom: PC1500_ROM_BYTES,
             standard_user_memory,
             standard_user_system_memory,
+            user_memory_end,
+            system_memory_end,
         }
     }
 }
@@ -107,10 +152,6 @@ impl Pc1500 {
         if addr >= 0x7000 && addr <= 0x75FF {
             return addr & 0x1FF | 0x7600;
         }
-
-        // if addr >= 0x7C00 && addr <= 0x7FFF {
-        //     return addr - 0x400;
-        // }
 
         addr
     }
@@ -133,20 +174,46 @@ impl Pc1500 {
             0x1F00E => self.lh5810.get_reg(lh5810::Reg::OPA),
             0x1F00F => self.lh5810.get_reg(lh5810::Reg::OPB),
             // ME0
-            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
+            a if (STANDARD_USER_MEMORY_BEGIN..=self.memory.user_memory_end).contains(&a) => {
                 self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize]
             }
-            STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
+            a if (STANDARD_USER_SYSTEM_MEMORY_BEGIN..=self.memory.system_memory_end).contains(&a) => {
                 self.memory.standard_user_system_memory
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize]
             }
             ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
+            // The virtual table of `CLOAD`/`CSAVE`/`MERGE`/`CHAIN`, only with `PV`=0 (see
+            // `host_io.rs`). It is read-only: writes fall into the "unmapped" arm of `write_byte`.
+            host_io::TABLE_BEGIN..=host_io::TABLE_END if !self.lh5801.pv() => {
+                host_io::rom_byte(addr)
+            }
             // Unmapped
             _ => {
-                println!("Read from unmapped address: {:#06X}", addr);
+                if LOG_UNMAPPED {
+                    println!("Read from unmapped address: {addr:#06X}");
+                }
                 INITIAL_VALUE
             }
         }
+    }
+
+    /// A byte of ME0's expansion window ($8000-$BFFF) as the CPU would see it with the given `PV`,
+    /// whatever it has now (outside that window, the one of [`Pc1500::read_byte`]).
+    ///
+    /// `PV` (an LH5801 pin) picks one of two banks of expansion ROMs in that window: the CE-150
+    /// uses `PV`=0 $A000-$BFFF and the CE-158 `PV`=1 $8000-$9FFF. The emulator only puts there the
+    /// virtual table of `host_io.rs` ($9800-$9FFF with `PV`=0); the rest reads empty ($FF), as with
+    /// nothing plugged in. It is used by the keyword table reader of `basic.rs`, which has to walk
+    /// both banks as the ROM's tokenizer does without changing the real `PV`.
+    pub(crate) fn read_banked(&self, addr: u16, pv: bool) -> u8 {
+        let wide = u32::from(addr);
+        if !(0x8000..0xC000).contains(&wide) {
+            return self.read_byte(wide);
+        }
+        if !pv && (host_io::TABLE_BEGIN..=host_io::TABLE_END).contains(&wide) {
+            return host_io::rom_byte(wide);
+        }
+        INITIAL_VALUE
     }
 
     pub fn write_byte(&mut self, addr: u32, value: u8) {
@@ -191,11 +258,11 @@ impl Pc1500 {
                 .lh5810
                 .set_reg(lh5810::Reg::OPB, value, self.lh5801.timer_state()),
             // ME0
-            STANDARD_USER_MEMORY_BEGIN..=STANDARD_USER_MEMORY_END => {
+            a if (STANDARD_USER_MEMORY_BEGIN..=self.memory.user_memory_end).contains(&a) => {
                 self.memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] =
                     value;
             }
-            STANDARD_USER_SYSTEM_MEMORY_BEGIN..=STANDARD_USER_SYSTEM_MEMORY_END => {
+            a if (STANDARD_USER_SYSTEM_MEMORY_BEGIN..=self.memory.system_memory_end).contains(&a) => {
                 self.memory.standard_user_system_memory
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
             }
@@ -204,7 +271,9 @@ impl Pc1500 {
             }
             // Unmapped
             _ => {
-                println!("Write to unmapped address: {:#06X}", addr);
+                if LOG_UNMAPPED {
+                    println!("Write to unmapped address: {addr:#06X}");
+                }
             }
         }
     }
