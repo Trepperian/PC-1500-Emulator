@@ -1,15 +1,11 @@
-//! Tests del LCD visto desde la GUI ([`Pc1500::display`]): los
-//! indicadores ("annunciators") con su polaridad real (bit a 1 =
-//! encendido), los tres segmentos `DE`/`G`/`RAD`, la matriz de puntos
-//! frente a la lectura directa de la RAM del arnés, y el enganche de la
-//! señal `DISP` que impide que el LCD parpadee en el bucle ocioso de
-//! teclado. Todo contra la ROM real, a través del arnés.
+//! Tests of the LCD as the GUI sees it ([`Pc1500::display`]): the indicators ("annunciators") with
+//! their real polarity (bit at 1 = on), the three segments `DE`/`G`/`RAD`, the dot matrix against
+//! the harness's direct reading of the RAM, and the latch of the `DISP` signal that keeps the LCD
+//! from flickering in the idle keyboard loop. All against the real ROM, through the harness.
 //!
-//! Las funciones LCD del arnés (`lcd_text`, `lcd_columns`,
-//! `lcd_symbol_bytes`) leen la RAM de pantalla tal cual, sin mirar `DISP`
-//! ni `BF`: sirven de oráculo independiente para los píxeles, pero el
-//! encendido/apagado del LCD solo se puede comprobar con
-//! [`Pc1500::display`].
+//! The harness's LCD functions (`lcd_text`, `lcd_columns`, `lcd_symbol_bytes`) read the display RAM
+//! as it is, without looking at `DISP` or `BF`: they are an independent oracle for the pixels, but
+//! the LCD being on or off can only be checked with [`Pc1500::display`].
 
 use std::{collections::HashSet, fs, path::Path};
 
@@ -19,17 +15,16 @@ use ceres_core::{
     harness::KeyStroke,
 };
 
-/// Máximo de frames que se espera a que la ROM vuelva al teclado tras
-/// una tecla de modo/indicador.
+/// Maximum of frames waited for the ROM to go back to the keyboard after a mode/indicator key.
 const READY_MAX_FRAMES: usize = 300;
 
 fn booted() -> Pc1500 {
     let mut pc = Pc1500::new_deterministic();
-    assert!(pc.boot().is_some(), "la ROM no lleg\u{f3} al prompt");
+    assert!(pc.boot().is_some(), "the ROM did not reach the prompt");
     pc
 }
 
-/// Los indicadores que se ven encendidos ahora mismo.
+/// The indicators that show lit right now.
 fn sym(pc: &mut Pc1500) -> HashSet<Symbol> {
     let display = pc.display();
     Symbol::ALL.into_iter().filter(|&s| display.is_symbol_on(s)).collect()
@@ -39,12 +34,12 @@ fn set(symbols: &[Symbol]) -> HashSet<Symbol> {
     symbols.iter().copied().collect()
 }
 
-/// Pulsa `stroke` y espera a que la ROM vuelva a estar lista.
+/// Presses `stroke` and waits for the ROM to be ready again.
 fn tap(pc: &mut Pc1500, stroke: KeyStroke) {
     pc.tap(stroke);
     assert!(
         pc.run_until_ready(READY_MAX_FRAMES).is_some(),
-        "la ROM no volvi\u{f3} al teclado tras {stroke:?}; LCD = [{}]",
+        "the ROM did not go back to the keyboard after {stroke:?}; LCD = [{}]",
         pc.lcd_text()
     );
 }
@@ -55,36 +50,35 @@ fn enter(pc: &mut Pc1500, line: &str) {
     }
 }
 
-/// Arranca y pasa a modo RUN (el arranque deja la máquina en PRO).
+/// Boots and goes to RUN mode (the boot leaves the machine in PRO).
 fn booted_in_run_mode() -> Pc1500 {
     let mut pc = booted();
     tap(&mut pc, KeyStroke::plain(Key::Mode));
-    assert!(sym(&mut pc).contains(&Symbol::Run), "MODE deber\u{ed}a pasar a RUN");
+    assert!(sym(&mut pc).contains(&Symbol::Run), "MODE should go to RUN");
     pc
 }
 
-/// Indicadores de modo (RUN/PRO/RESERVE) encendidos.
+/// Mode indicators (RUN/PRO/RESERVE) lit.
 fn mode_symbols(pc: &mut Pc1500) -> HashSet<Symbol> {
     let mode = set(&[Symbol::Run, Symbol::Pro, Symbol::Reserve]);
     sym(pc).intersection(&mode).copied().collect()
 }
 
-/// Indicadores de unidad angular (DE/G/RAD) encendidos.
+/// Angle unit indicators (DE/G/RAD) lit.
 fn angle_symbols(pc: &mut Pc1500) -> HashSet<Symbol> {
     let angle = set(&[Symbol::De, Symbol::G, Symbol::Rad]);
     sym(pc).intersection(&angle).copied().collect()
 }
 
-/// Indicadores de nivel de RESERVE (I/II/III) encendidos.
+/// RESERVE level indicators (I/II/III) lit.
 fn reserve_level_symbols(pc: &mut Pc1500) -> HashSet<Symbol> {
     let levels = set(&[Symbol::RomanI, Symbol::RomanII, Symbol::RomanIII]);
     sym(pc).intersection(&levels).copied().collect()
 }
 
-/// Regresión de la polaridad: antes `display.rs` encendía cada indicador
-/// con su bit a 0, y al arrancar se veía justo lo contrario de la
-/// máquina real (BUSY, SHIFT, KANA, SML, II, III, DEF, RAD, RESERVE y la
-/// pila encendidos; I, DEG y PRO apagados).
+/// Regression of the polarity: `display.rs` used to light each indicator with its bit at 0, and at
+/// boot it showed just the opposite of the real machine (BUSY, SHIFT, KANA, SML, II, III, DEF, RAD,
+/// RESERVE and the battery on; I, DEG and PRO off).
 #[test]
 fn boot_annunciators() {
     let mut pc = booted();
@@ -104,9 +98,8 @@ fn mode_cycle() {
     assert_eq!(pc.lcd_symbol_bytes()[1] & 0x70, 0x20);
 }
 
-/// `SHIFT` + `MODE` = RESERVE; otro `SHIFT` + `MODE` vuelve a RUN (la
-/// rotación $10 → $40 de `BTN_MODE`, $CBB1, depende del flag H de
-/// `SHR`).
+/// `SHIFT` + `MODE` = RESERVE; another `SHIFT` + `MODE` goes back to RUN (the rotation $10 → $40 of
+/// `BTN_MODE`, $CBB1, depends on the H flag of `SHR`).
 #[test]
 fn shift_mode_reserve() {
     let mut pc = booted();
@@ -116,8 +109,8 @@ fn shift_mode_reserve() {
     assert_eq!(mode_symbols(&mut pc), set(&[Symbol::Run]));
 }
 
-/// `SHIFT` y `DEF` son prefijos que se conmutan y se excluyen entre sí
-/// (`AUTO_OFF_15`/`AUTO_OFF_16`, $E3E8/$E3EF).
+/// `SHIFT` and `DEF` are prefixes that toggle and exclude each other (`AUTO_OFF_15`/`AUTO_OFF_16`,
+/// $E3E8/$E3EF).
 #[test]
 fn shift_def_latch() {
     let mut pc = booted();
@@ -131,13 +124,13 @@ fn shift_def_latch() {
     tap(&mut pc, KeyStroke::plain(Key::Control));
     let on = sym(&mut pc);
     assert!(on.contains(&Symbol::Def), "{on:?}");
-    assert!(!on.contains(&Symbol::Shift), "DEF apaga SHIFT: {on:?}");
+    assert!(!on.contains(&Symbol::Shift), "DEF turns SHIFT off: {on:?}");
     tap(&mut pc, KeyStroke::plain(Key::Control));
     assert!(!sym(&mut pc).contains(&Symbol::Def));
 }
 
-/// `SML` conmuta SMALL y nunca KANA: el emulador es el modelo de
-/// exportación (PB3 = 1, `AUTO_OFF_17` $E3F6).
+/// `SML` toggles SMALL and never KANA: the emulator is the export model (PB3 = 1, `AUTO_OFF_17`
+/// $E3F6).
 #[test]
 fn sml_toggle() {
     let mut pc = booted();
@@ -151,8 +144,8 @@ fn sml_toggle() {
     assert!(!after.contains(&Symbol::Kana), "{after:?}");
 }
 
-/// `DEGREE` = DE + G, `RADIAN` = RAD, `GRAD` = G + RAD: tres segmentos
-/// distintos (antes `G` y `RAD` compartían un único `Symbol::Rad`).
+/// `DEGREE` = DE + G, `RADIAN` = RAD, `GRAD` = G + RAD: three different segments (`G` and `RAD`
+/// used to share a single `Symbol::Rad`).
 #[test]
 fn angle_units() {
     let mut pc = booted_in_run_mode();
@@ -164,8 +157,8 @@ fn angle_units() {
     assert_eq!(angle_symbols(&mut pc), set(&[Symbol::De, Symbol::G]));
 }
 
-/// En modo RESERVE la tecla ⇕ (`Key::Rsv`) rota el nivel I → II → III
-/// → I (`RSV_CHNG`, $CB69), con un único indicador encendido cada vez.
+/// In RESERVE mode the ⇕ key (`Key::Rsv`) rotates the level I → II → III → I (`RSV_CHNG`, $CB69),
+/// with a single indicator lit each time.
 #[test]
 fn reserve_levels() {
     let mut pc = booted();
@@ -178,8 +171,7 @@ fn reserve_levels() {
     }
 }
 
-/// BUSY encendido mientras corre un programa (y el LCD sigue encendido);
-/// un BREAK lo apaga.
+/// BUSY on while a program runs (and the LCD stays on); a BREAK turns it off.
 #[test]
 fn busy_while_running() {
     let mut pc = booted();
@@ -187,7 +179,7 @@ fn busy_while_running() {
     enter(&mut pc, "10 GOTO 10");
     tap(&mut pc, KeyStroke::plain(Key::Mode));
     if let Err(c) = pc.type_text("RUN\n") {
-        panic!("sin tecla: {c:?}");
+        panic!("no key: {c:?}");
     }
     pc.run_frames(30);
     assert!(pc.display().is_on());
@@ -199,8 +191,8 @@ fn busy_while_running() {
     assert!(!sym(&mut pc).contains(&Symbol::Busy));
 }
 
-/// La matriz de [`Pc1500::display`] coincide punto a punto con la
-/// lectura directa de la RAM de pantalla del arnés.
+/// The matrix of [`Pc1500::display`] matches dot by dot the harness's direct reading of the display
+/// RAM.
 #[test]
 fn pixels_match_harness() {
     let mut pc = booted_in_run_mode();
@@ -218,10 +210,9 @@ fn pixels_match_harness() {
     }
 }
 
-/// El bucle ocioso de teclado de la ROM apaga `DISP` ~1.3 ms en cada
-/// vuelta (`WAIT_4_KB_17`, $E30D `RDP` ... $E313 `SDP`). Sin el
-/// enganche de `DISP`, cada vez que un frame terminaba dentro de ese
-/// pulso la GUI pintaba un frame con el LCD en blanco.
+/// The ROM's idle keyboard loop turns `DISP` off ~1.3 ms at each turn (`WAIT_4_KB_17`, $E30D `RDP`
+/// ... $E313 `SDP`). Without the latch of `DISP`, each time a frame ended inside that pulse the GUI
+/// painted a frame with the LCD blank.
 #[test]
 fn lcd_never_blanks_while_idle() {
     let mut pc = booted();
@@ -231,23 +222,21 @@ fn lcd_never_blanks_while_idle() {
         if !pc.cpu().display_enabled() {
             disp_off_at_boundary += 1;
         }
-        assert!(pc.display().is_on(), "LCD apagado en el frame {frame}");
+        assert!(pc.display().is_on(), "LCD off at frame {frame}");
     }
-    // Comprueba que el test ejerce de verdad el enganche: algún frame
-    // tuvo que terminar con `DISP` desactivado.
-    assert!(disp_off_at_boundary > 0, "ning\u{fa}n frame acab\u{f3} dentro del pulso RDP");
+    // Checks that the test really exercises the latch: some frame had to end with `DISP` off.
+    assert!(disp_off_at_boundary > 0, "no frame ended inside the RDP pulse");
 }
 
-/// Si `DISP` se queda desactivado un intervalo entero, el LCD sí se ve
-/// apagado; el intervalo en el que se desactivó todavía se ve encendido
-/// (empezó con `DISP` activo). Y llamar a `display()` dos veces sin
-/// emular nada entre medias da lo mismo.
+/// If `DISP` stays off for a whole interval, the LCD does show off; the interval in which it was
+/// turned off still shows on (it started with `DISP` on). And calling `display()` twice without
+/// emulating anything in between gives the same.
 #[test]
 fn disp_off_for_a_whole_interval_blanks() {
     let mut pc = booted();
     assert!(pc.display().is_on());
-    // $0100: `RIE` (FD BE) para que ninguna interrupción vuelva a la
-    // ROM, `RDP` (FD C0) y `BCH -2` (9E 02), un bucle infinito.
+    // $0100: `RIE` (FD BE) so that no interrupt goes back to the ROM, `RDP` (FD C0) and `BCH -2`
+    // (9E 02), an endless loop.
     let code = [0xFD, 0xBE, 0xFD, 0xC0, 0x9E, 0x02];
     let mut file = vec![0x00, 0x01, 0x06, 0x00];
     file.extend_from_slice(&code);
@@ -260,19 +249,19 @@ fn disp_off_for_a_whole_interval_blanks() {
     }
     pc.run_frames(1);
     assert!(!pc.cpu().display_enabled());
-    assert!(pc.display().is_on(), "el intervalo empez\u{f3} con DISP activo");
+    assert!(pc.display().is_on(), "the interval started with DISP on");
     pc.run_frames(1);
     assert!(!pc.display().is_on());
-    assert!(!pc.display().is_on(), "segunda muestra sin emular");
+    assert!(!pc.display().is_on(), "second sample without emulating");
     let display = pc.display();
     assert!(Symbol::ALL.iter().all(|&s| !display.is_symbol_on(s)));
     assert!((0..DISPLAY_WIDTH).all(|x| (0..DISPLAY_HEIGHT).all(|y| !display.is_pixel_on(x, y))));
-    // La RAM de pantalla sigue intacta: solo está apagado el panel.
+    // The display RAM is still intact: only the panel is off.
     assert_eq!(pc.lcd_symbol_bytes(), [0x40, 0x23]);
 }
 
-/// Con la máquina apagada (`OFF`) el panel entero se ve en blanco; al
-/// encenderla vuelven los indicadores.
+/// With the machine off (`OFF`) the whole panel shows blank; when it is switched on the indicators
+/// come back.
 #[test]
 fn power_off_blanks() {
     let mut pc = booted();

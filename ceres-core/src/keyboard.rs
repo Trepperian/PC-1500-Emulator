@@ -1,33 +1,28 @@
-//! Teclado de la PC-1500: las 65 teclas reales, la matriz de 8×8 que barre
-//! la ROM y la conversión de caracteres ASCII a pulsaciones.
+//! The PC-1500's keyboard: the 65 real keys, the 8×8 matrix the ROM scans and the conversion of
+//! ASCII characters to key presses.
 //!
-//! # La matriz
-//! 64 de las 65 teclas están en una matriz de 8 filas × 8 columnas. La ROM
-//! la barre escribiendo una "fila" (un bit a 1 por fila) en el registro
-//! `DDA` del LH5810 (`ISKEY_1`, $E41A: `STA #(PC1500_PRT_A_DIR)`) y
-//! leyendo las 8 columnas con `ITA` (un bit a 0 por tecla pulsada; la ROM
-//! lo invierte con `EAI $FF`). Ver [`MATRIX`] y [`Keyboard::input`].
+//! # The matrix
+//! 64 of the 65 keys are in a matrix of 8 rows × 8 columns. The ROM scans it by writing a "row"
+//! (one bit at 1 per row) to the LH5810's `DDA` register (`ISKEY_1`, $E41A:
+//! `STA #(PC1500_PRT_A_DIR)`) and reading the 8 columns with `ITA` (one bit at 0 per key pressed;
+//! the ROM inverts it with `EAI $FF`). See [`MATRIX`] and [`Keyboard::input`].
 //!
-//! La 65ª tecla, `ON/BRK`, NO está en la matriz: va a la patilla PB7 del
-//! LH5810 (ver `Keyboard::on_pulse`).
+//! The 65th key, `ON/BRK`, is NOT in the matrix: it goes to the LH5810's PB7 pin (see
+//! `Keyboard::on_pulse`).
 //!
-//! # `SHIFT` es un prefijo, no un modificador
-//! En la máquina real `SHIFT` (igual que `DEF` y `SML`) NO se mantiene a
-//! la vez que la otra tecla: se pulsa y se suelta, se enciende su
-//! indicador en el LCD (bit 1 de $764E) y afecta a la SIGUIENTE tecla
-//! (`AUTO_OFF_15`, $E3E8, lo invierte; `AUTO_OFF_6_1`, $E39E, lo borra
-//! tras la siguiente tecla). Mantenerla pulsada junto con otra no sirve
-//! de nada: `KEY_2_ASCII` ($E42C) devuelve solo la PRIMERA tecla que
-//! encuentra en el barrido y `SHIFT` está en la fila 0, por delante de
-//! casi todas, así que la otra tecla nunca se ve. Por eso [`KeyStroke`]
-//! es "tecla + si va precedida de `SHIFT`", no un conjunto de teclas a
-//! la vez.
+//! # `SHIFT` is a prefix, not a modifier
+//! On the real machine `SHIFT` (like `DEF` and `SML`) is NOT held together with the other key: it
+//! is pressed and released, its indicator lights on the LCD (bit 1 of $764E) and it affects the
+//! NEXT key (`AUTO_OFF_15`, $E3E8, toggles it; `AUTO_OFF_6_1`, $E39E, clears it after the next
+//! key). Holding it down together with another key is no use: `KEY_2_ASCII` ($E42C) returns only
+//! the FIRST key it finds in the scan, and `SHIFT` is in row 0, ahead of almost all of them, so the
+//! other key is never seen. That is why [`KeyStroke`] is "key + whether `SHIFT` goes before it",
+//! not a set of keys at once.
 
-/// Una tecla física de la PC-1500.
+/// A physical key of the PC-1500.
 ///
-/// El orden de las variantes es el índice de [`Key::ALL`] y de
-/// `Keyboard::pressed_keys` (`key as usize`): no reordenar sin cambiar
-/// también [`Key::ALL`] (lo comprueban los tests).
+/// The order of the variants is the index in [`Key::ALL`] and in `Keyboard::pressed_keys`
+/// (`key as usize`): do not reorder them without also changing [`Key::ALL`] (the tests check it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     A,
@@ -35,9 +30,8 @@ pub enum Key {
     B,
     C,
     Cl,
-    /// La tecla `DEF` (el nombre `Control` se conserva por compatibilidad
-    /// con el código que ya la usaba). Es un prefijo como `SHIFT`: activa
-    /// el indicador `DEF` (bit 7 de $764E) para la siguiente tecla.
+    /// The `DEF` key (the name `Control` is kept for the code that already used it). It is a prefix
+    /// like `SHIFT`: it lights the `DEF` indicator (bit 7 of $764E) for the next key.
     Control,
     D,
     Dot,
@@ -70,7 +64,7 @@ pub enum Key {
     Nine,
     O,
     Off,
-    /// `ON/BRK`: fuera de la matriz (ver `Keyboard::on_pulse`).
+    /// `ON/BRK`: outside the matrix (see `Keyboard::on_pulse`).
     On,
     One,
     P,
@@ -80,9 +74,8 @@ pub enum Key {
     Rcl,
     Right,
     RightParen,
-    /// `RSV`: cambia de "capa" de teclas reservadas (código $09 →
-    /// `RSV_CHNG`, $CB69). Es una tecla real de la fila inferior, entre
-    /// `SML` y `RCL`.
+    /// `RSV`: changes the "layer" of reserved keys (code $09 → `RSV_CHNG`, $CB69). It is a real key
+    /// of the bottom row, between `SML` and `RCL`.
     Rsv,
     S,
     Seven,
@@ -104,16 +97,14 @@ pub enum Key {
     Zero,
 }
 
-/// La matriz de teclado, `MATRIX[fila][bit]`: `fila` es el bit de `KS`
-/// (el valor que escribe la ROM en `DDA`: fila 0 = $01 ... fila 7 = $80)
-/// y `bit` el bit que se lee con `ITA`.
+/// The keyboard matrix, `MATRIX[row][bit]`: `row` is the bit of `KS` (the value the ROM writes to
+/// `DDA`: row 0 = $01 ... row 7 = $80) and `bit` the bit read with `ITA`.
 ///
-/// Comprobada contra las dos tablas de la ROM que convierten posición a
-/// código, `KB_LAYOUT_NORM` ($FE80) y `KB_LAYOUT_SH` ($FEC0, con
-/// `SHIFT`), que `KEY_2_ASCII` ($E42C-$E44E) indexa como
-/// `$80 + 8 × fila + (7 − bit)` (ver `tests/keyboard_mapping.rs`), y
-/// contra `PockEmul` (`pc1500.cpp`, `Cpc15XX::in()`), que coincide bit a
-/// bit. La única tecla que no está es `ON/BRK` ([`Key::On`]).
+/// Checked against the ROM's two tables that turn a position into a code, `KB_LAYOUT_NORM` ($FE80)
+/// and `KB_LAYOUT_SH` ($FEC0, with `SHIFT`), which `KEY_2_ASCII` ($E42C-$E44E) indexes as
+/// `$80 + 8 × row + (7 − bit)` (see `tests/keyboard_mapping.rs`), and against `PockEmul`
+/// (`pc1500.cpp`, `Cpc15XX::in()`), which matches bit for bit. The only key not in it is `ON/BRK`
+/// ([`Key::On`]).
 pub const MATRIX: [[Key; 8]; 8] = {
     use Key as K;
     [
@@ -129,11 +120,10 @@ pub const MATRIX: [[Key; 8]; 8] = {
 };
 
 impl Key {
-    /// Número de teclas: las 64 de la matriz más `ON/BRK`.
+    /// Number of keys: the 64 of the matrix plus `ON/BRK`.
     pub const COUNT: usize = 65;
 
-    /// Todas las teclas, en el orden de declaración del enum (así
-    /// `Key::ALL[k as usize] == k`).
+    /// All the keys, in the enum's declaration order (so `Key::ALL[k as usize] == k`).
     pub const ALL: [Self; Self::COUNT] = {
         [
             Self::A,
@@ -204,8 +194,8 @@ impl Key {
         ]
     };
 
-    /// Posición `(fila, bit)` de la tecla en [`MATRIX`], o `None` para
-    /// `ON/BRK`, que no está en la matriz.
+    /// Position `(row, bit)` of the key in [`MATRIX`], or `None` for `ON/BRK`, which is not in the
+    /// matrix.
     #[must_use]
     pub const fn matrix_pos(self) -> Option<(u8, u8)> {
         let mut row = 0;
@@ -215,7 +205,7 @@ impl Key {
                 if MATRIX[row][bit] as usize == self as usize {
                     #[expect(
                         clippy::cast_possible_truncation,
-                        reason = "fila y bit son < 8"
+                        reason = "row and bit are < 8"
                     )]
                     return Some((row as u8, bit as u8));
                 }
@@ -226,10 +216,8 @@ impl Key {
         None
     }
 
-    /// `true` para las 26 letras, las únicas teclas cuyo resultado
-    /// depende del modo `SML` (minúsculas): la ROM invierte
-    /// mayúsculas/minúsculas solo en las letras (`AUTO_OFF_5..9`,
-    /// $E38D-$E3AF).
+    /// `true` for the 26 letters, the only keys whose result depends on the `SML` mode (lowercase):
+    /// the ROM swaps upper and lower case only for letters (`AUTO_OFF_5..9`, $E38D-$E3AF).
     #[must_use]
     pub const fn is_letter(self) -> bool {
         matches!(
@@ -262,8 +250,7 @@ impl Key {
         )
     }
 
-    /// El rótulo principal de la tecla, tal como va impreso en ella (las
-    /// flechas como flechas Unicode).
+    /// The key's main label, as printed on it (the arrows as Unicode arrows).
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -335,13 +322,11 @@ impl Key {
         }
     }
 
-    /// El rótulo de `SHIFT` impreso encima de la tecla (lo que teclea
-    /// precedida de `SHIFT`), o `None` si no tiene. Las letras no llevan
-    /// rótulo: con `SHIFT` dan la minúscula (con `SML` apagado).
+    /// The `SHIFT` label printed above the key (what it types after `SHIFT`), or `None` if it has
+    /// none. Letters have no label: with `SHIFT` they give the lowercase letter (with `SML` off).
     ///
-    /// Sale de `KB_LAYOUT_SH` ($FEC0) y de `EDCTRL_TBL` ($C38B) para los
-    /// códigos de control: `DEL` ($1D), `INS` ($1C), `CA` ($1A) y
-    /// `RESERVE` ($1E, "SHIFT-MODE").
+    /// It comes from `KB_LAYOUT_SH` ($FEC0), and from `EDCTRL_TBL` ($C38B) for the control codes:
+    /// `DEL` ($1D), `INS` ($1C), `CA` ($1A) and `RESERVE` ($1E, "SHIFT-MODE").
     #[must_use]
     pub const fn shift_label(self) -> Option<&'static str> {
         Some(match self {
@@ -369,15 +354,13 @@ impl Key {
         })
     }
 
-    /// El código que genera la tecla según las tablas de la ROM
-    /// (`KB_LAYOUT_NORM` $FE80 sin `SHIFT`, `KB_LAYOUT_SH` $FEC0 con
-    /// `SHIFT`), o `None` para `ON/BRK`, que no está en ellas.
+    /// The code the key generates according to the ROM's tables (`KB_LAYOUT_NORM` $FE80 without
+    /// `SHIFT`, `KB_LAYOUT_SH` $FEC0 with `SHIFT`), or `None` for `ON/BRK`, which is not in them.
     ///
-    /// Los códigos de control son los de `EDCTRL_TBL` ($C38B): $08 ←, $09
-    /// `RSV`, $0A ↓, $0B ↑, $0C →, $18 `CL`, $19 `RCL`, $1A `CA`, $1B
-    /// `DEF`, $1C `INS`, $1D `DEL`, $1E `RESERVE`, $1F `MODE`; además $01
-    /// `SHIFT`, $02 `SML`, $0D `ENTER` y $0F `OFF`. Con `SHIFT` las letras
-    /// dan la minúscula. Sirve para comprobar [`MATRIX`] contra la ROM.
+    /// The control codes are those of `EDCTRL_TBL` ($C38B): $08 ←, $09 `RSV`, $0A ↓, $0B ↑, $0C →,
+    /// $18 `CL`, $19 `RCL`, $1A `CA`, $1B `DEF`, $1C `INS`, $1D `DEL`, $1E `RESERVE`, $1F `MODE`;
+    /// besides, $01 `SHIFT`, $02 `SML`, $0D `ENTER` and $0F `OFF`. With `SHIFT` letters give the
+    /// lowercase letter. It is used to check [`MATRIX`] against the ROM.
     #[must_use]
     pub const fn rom_code(self, shift: bool) -> Option<u8> {
         let (normal, shifted) = match self {
@@ -421,7 +404,7 @@ impl Key {
             Self::Rcl => (0x19, 0x19),
             Self::Control => (0x1B, 0x1B),
             letter => {
-                // Letra: el rótulo es la mayúscula; con SHIFT, + $20.
+                // Letter: the label is the uppercase letter; with SHIFT, + $20.
                 let upper = letter.label().as_bytes()[0];
                 (upper, upper + 0x20)
             }
@@ -430,15 +413,12 @@ impl Key {
     }
 }
 
-/// Una pulsación lógica: una tecla física de la PC-1500, opcionalmente
-/// precedida de `SHIFT`.
+/// A logical key press: a physical key of the PC-1500, optionally after `SHIFT`.
 ///
-/// En la PC-1500 `SHIFT` NO se mantiene a la vez que la otra tecla: es
-/// una tecla de prefijo (se pulsa y se suelta, se enciende el indicador
-/// `SHIFT` del LCD y afecta a la siguiente tecla). Además, aunque se
-/// mantuviera, `KEY_2_ASCII` ($E42C) devuelve solo la PRIMERA tecla que
-/// encuentra en el barrido de la matriz, así que dos teclas a la vez no
-/// componen nada.
+/// On the PC-1500 `SHIFT` is NOT held together with the other key: it is a prefix key (pressed and
+/// released, it lights the LCD's `SHIFT` indicator and affects the next key). Besides, even if it
+/// were held, `KEY_2_ASCII` ($E42C) returns only the FIRST key it finds in the matrix scan, so two
+/// keys at once make up nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyStroke {
     pub key: Key,
@@ -457,28 +437,23 @@ impl KeyStroke {
     }
 }
 
-/// Convierte un carácter ASCII a la pulsación de la PC-1500 que lo
-/// produce, o `None` si no hay ninguna tecla que lo genere.
+/// Converts an ASCII character to the PC-1500 key press that produces it, or `None` if no key
+/// generates it.
 ///
-/// Sacado de las dos tablas de teclado de la ROM, `KB_LAYOUT_NORM`
-/// ($FE80) y `KB_LAYOUT_SH` ($FEC0, con `SHIFT`), cruzadas con
-/// [`MATRIX`] (fila = bit de `KS`, columna = bit leído por `ITA`;
-/// `KEY_2_ASCII` indexa la tabla como fila × 8 + (7 − bit)):
+/// Taken from the ROM's two keyboard tables, `KB_LAYOUT_NORM` ($FE80) and `KB_LAYOUT_SH` ($FEC0,
+/// with `SHIFT`), crossed with [`MATRIX`] (row = bit of `KS`, column = bit read by `ITA`;
+/// `KEY_2_ASCII` indexes the table as row × 8 + (7 − bit)):
 ///
-/// - Sin `SHIFT`: `A`-`Z`, `0`-`9`, espacio, `\n` (ENTER), `.` `-` `+`
-///   `*` `/` `=` `(` `)`.
-/// - Con `SHIFT`: `!` `"` `#` `$` `%` `&` (F1-F6), `,` (`-`), `<` (`(`),
-///   `>` (`)`), `?` (`/`), `:` (`*`), `;` (`+`), `@` (`=`), `^`
-///   (espacio), `[` (↑), `]` (↓), y `a`-`z` (letra con `SHIFT`).
+/// - Without `SHIFT`: `A`-`Z`, `0`-`9`, space, `\n` (ENTER), `.` `-` `+` `*` `/` `=` `(` `)`.
+/// - With `SHIFT`: `!` `"` `#` `$` `%` `&` (F1-F6), `,` (`-`), `<` (`(`), `>` (`)`), `?` (`/`), `:`
+///   (`*`), `;` (`+`), `@` (`=`), `^` (space), `[` (↑), `]` (↓), and `a`-`z` (letter with `SHIFT`).
 ///
-/// Las minúsculas asumen el modo `SML` apagado (el de arranque): con
-/// `SML` encendido la ROM invierte mayúsculas/minúsculas (el alimentador
-/// de teclas de la GUI lo tiene en cuenta, ver `ShiftPolicy::Exact`).
+/// Lowercase letters assume the `SML` mode off (the one at boot): with `SML` on, the ROM swaps
+/// upper and lower case (the GUI's key feeder takes it into account, see `ShiftPolicy::Exact`).
 ///
-/// No tienen tecla (devuelven `None`): `'` `_` `` ` `` `{` `|` `}` `~`
-/// `\` y cualquier carácter no ASCII o de control distinto de `\n`. El
-/// glifo de `_` existe en la ROM (es el propio cursor), pero ninguna
-/// tecla lo genera.
+/// With no key (they return `None`): `'` `_` `` `
+/// `` `{` `|` `}` `~` `\` and any non-ASCII character or control character other than `\n`. The glyph of `_`
+/// exists in the ROM (it is the cursor itself), but no key generates it.
 #[must_use]
 pub fn key_for_char(c: char) -> Option<KeyStroke> {
     use Key as K;
@@ -566,11 +541,11 @@ const fn digit_key(index: u8) -> Key {
     DIGITS[index as usize]
 }
 
-/// Traduce un texto entero a la secuencia de pulsaciones que lo teclea.
+/// Translates a whole text to the sequence of key presses that types it.
 ///
-/// `\r` se ignora (para aceptar ficheros con saltos de línea CRLF tal
-/// cual) y `\n` es ENTER. Devuelve `Err(c)` con el primer carácter que no
-/// se puede teclear (ver [`key_for_char`]), sin teclear nada.
+/// `\r` is ignored (to accept files with CRLF line ends as they are) and `\n` is ENTER. It returns
+/// `Err(c)` with the first character that cannot be typed (see [`key_for_char`]), without typing
+/// anything.
 pub fn text_to_keystrokes(text: &str) -> Result<Vec<KeyStroke>, char> {
     text.chars()
         .filter(|&c| c != '\r')
@@ -582,25 +557,20 @@ pub fn text_to_keystrokes(text: &str) -> Result<Vec<KeyStroke>, char> {
 pub struct Keyboard {
     ks: u8,
     pressed_keys: [bool; Key::COUNT],
-    /// Pulso pendiente de la tecla `ON/BRK` (ver [`Keyboard::take_on_pulse`]).
+    /// Pending pulse of the `ON/BRK` key (see [`Keyboard::take_on_pulse`]).
     ///
-    /// `ON/BRK` no forma parte de la matriz de teclado que barre la ROM
-    /// con `KS`/`ITA` (por eso no aparece en [`Keyboard::input`]): en la
-    /// PC-1500 real va cableada a la patilla PB7 del LH5810, que la
-    /// "engancha" en el bit 1 de su registro `IF`. La ROM solo consulta
-    /// ese bit (`CHK_BRK`, $E451) y lo borra ella misma cuando atiende
-    /// el BREAK ($C4C6/$C4ED), así que lo que tiene que llegarle es un
-    /// FLANCO por pulsación, no un nivel: si PB7 siguiera alto mientras
-    /// la tecla está mantenida, el `IF` se volvería a poner a 1 justo
-    /// después de que la ROM lo borrara y un segundo BREAK caería en el
-    /// editor (`BCMD_STOP_6` → `WARM_START`), borrando el mensaje
-    /// `BREAK IN nn` recién escrito. Es lo mismo que hace `PockEmul` con
-    /// `Ckeyb::CheckKon()` (`Kon` de un solo disparo).
+    /// `ON/BRK` is not part of the keyboard matrix the ROM scans with `KS`/`ITA` (that is why it
+    /// does not appear in [`Keyboard::input`]): on the real PC-1500 it is wired to the LH5810's PB7
+    /// pin, which "latches" it in bit 1 of its `IF` register. The ROM only checks that bit
+    /// (`CHK_BRK`, $E451) and clears it itself when it serves the BREAK ($C4C6/$C4ED), so what must
+    /// reach it is an EDGE per key press, not a level: if PB7 stayed high while the key is held,
+    /// `IF` would be set again right after the ROM cleared it, and a second BREAK would land in the
+    /// editor (`BCMD_STOP_6` → `WARM_START`), clearing the `BREAK IN nn` message just written. It
+    /// is what `PockEmul` does with `Ckeyb::CheckKon()` (a one-shot `Kon`).
     ///
-    /// Se activa en el flanco de subida de `press(Key::On)` y sobrevive
-    /// aunque la tecla se suelte antes de que la CPU llegue a ejecutar
-    /// nada (p. ej. una pulsación y suelta dentro del mismo repintado de
-    /// la GUI): hasta que no lo recoge `Pc1500::step` no se pierde.
+    /// It is set on the rising edge of `press(Key::On)` and survives even if the key is released
+    /// before the CPU gets to run anything (e.g. a press and release within the same repaint of the
+    /// GUI): it is not lost until `Pc1500::step` picks it up.
     on_pulse: bool,
 }
 
@@ -618,10 +588,9 @@ impl Keyboard {
     }
 
     pub fn press(&mut self, key: Key) {
-        // Solo el flanco de subida: volver a llamar a `press(Key::On)`
-        // con la tecla ya pulsada (autorrepetición del sistema operativo,
-        // la GUI reafirmando una tecla mantenida...) no genera otro
-        // BREAK. Ver `on_pulse`.
+        // Only the rising edge: calling `press(Key::On)` again with the key already down (the
+        // operating system's key repeat, the GUI reasserting a held key...) does not generate
+        // another BREAK. See `on_pulse`.
         if key == Key::On && !self.pressed_keys[key as usize] {
             self.on_pulse = true;
         }
@@ -632,32 +601,30 @@ impl Keyboard {
         self.pressed_keys[key as usize] = false;
     }
 
-    /// `true` si `key` está pulsada ahora mismo.
+    /// `true` if `key` is down right now.
     #[must_use]
     pub const fn is_pressed(&self, key: Key) -> bool {
         self.pressed_keys[key as usize]
     }
 
-    /// `true` si hay un pulso de `ON/BRK` pendiente de recoger (ver
-    /// [`Keyboard::take_on_pulse`]), sin recogerlo.
+    /// `true` if there is an `ON/BRK` pulse waiting to be picked up (see
+    /// [`Keyboard::take_on_pulse`]), without picking it up.
     #[must_use]
     pub const fn on_pulse_pending(&self) -> bool {
         self.on_pulse
     }
 
-    /// Recoge (y borra) el pulso pendiente de `ON/BRK`: `true` una sola
-    /// vez por cada pulsación de la tecla, por mucho que se mantenga.
-    /// Ver `on_pulse` para el porqué.
+    /// Picks up (and clears) the pending `ON/BRK` pulse: `true` only once for each press of the
+    /// key, however long it is held. See `on_pulse` for why.
     pub const fn take_on_pulse(&mut self) -> bool {
         let pulse = self.on_pulse;
         self.on_pulse = false;
         pulse
     }
 
-    /// Lo que lee la ROM con `ITA` para la fila (o filas) que tiene
-    /// seleccionadas en `KS`: un bit a 0 por cada columna con alguna tecla
-    /// pulsada en alguna de esas filas (ver [`MATRIX`]). Antes era una
-    /// cadena de 64 `if` escritos a mano, con el mismo resultado.
+    /// What the ROM reads with `ITA` for the row (or rows) selected in `KS`: one bit at 0 for each
+    /// column with some key down in any of those rows (see [`MATRIX`]). It used to be a chain of 64
+    /// `if`s written by hand, with the same result.
     #[must_use]
     pub fn input(&self) -> u8 {
         let mut data = 0;
@@ -685,18 +652,18 @@ mod tests {
         assert!(!kb.take_on_pulse());
 
         kb.press(Key::On);
-        // Reafirmar la pulsación (autorrepetición) no genera otro pulso.
+        // Reasserting the key press (key repeat) does not generate another pulse.
         kb.press(Key::On);
         assert!(kb.is_pressed(Key::On));
         assert!(kb.take_on_pulse());
-        assert!(!kb.take_on_pulse(), "solo una vez");
+        assert!(!kb.take_on_pulse(), "only once");
         kb.press(Key::On);
-        assert!(!kb.take_on_pulse(), "mantenida no vuelve a disparar");
+        assert!(!kb.take_on_pulse(), "held, it does not fire again");
 
         kb.release(Key::On);
         assert!(!kb.take_on_pulse());
         kb.press(Key::On);
-        assert!(kb.take_on_pulse(), "nueva pulsaci\u{f3}n, nuevo pulso");
+        assert!(kb.take_on_pulse(), "new press, new pulse");
     }
 
     #[test]
@@ -714,7 +681,7 @@ mod tests {
         kb.set_ks(0xFF);
         let idle = kb.input();
         kb.press(Key::On);
-        assert_eq!(kb.input(), idle, "ON no cambia ninguna columna");
+        assert_eq!(kb.input(), idle, "ON changes no column");
         assert_eq!(Key::On.matrix_pos(), None);
     }
 
@@ -725,9 +692,8 @@ mod tests {
         }
     }
 
-    /// Cada tecla pulsada sola pone a 0 exactamente su bit, y solo cuando
-    /// su fila está seleccionada en `KS`: lo mismo que hacían los 64 `if`
-    /// escritos a mano de antes de `MATRIX`.
+    /// Each key pressed alone clears exactly its bit, and only when its row is selected in `KS`:
+    /// the same as the 64 `if`s written by hand before `MATRIX`.
     #[test]
     fn input_reads_one_bit_per_key_and_row() {
         for key in Key::ALL {
@@ -739,12 +705,12 @@ mod tests {
             for strobe in 0..8 {
                 kb.set_ks(1 << strobe);
                 let expected = if strobe == row { !(1_u8 << bit) } else { 0xFF };
-                assert_eq!(kb.input(), expected, "{key:?} con KS={:#04X}", 1 << strobe);
+                assert_eq!(kb.input(), expected, "{key:?} with KS={:#04X}", 1 << strobe);
             }
             kb.set_ks(0xFF);
-            assert_eq!(kb.input(), !(1_u8 << bit), "{key:?} con todas las filas");
+            assert_eq!(kb.input(), !(1_u8 << bit), "{key:?} with all the rows");
             kb.set_ks(0);
-            assert_eq!(kb.input(), 0xFF, "{key:?} sin filas");
+            assert_eq!(kb.input(), 0xFF, "{key:?} with no rows");
         }
     }
 
@@ -755,7 +721,7 @@ mod tests {
         kb.press(Key::Dot); // fila 1 bit 0
         kb.press(Key::Down); // fila 7 bit 7
         kb.set_ks(0x03);
-        assert_eq!(kb.input(), 0xFE, "dos filas, misma columna");
+        assert_eq!(kb.input(), 0xFE, "two rows, same column");
         kb.set_ks(0x83);
         assert_eq!(kb.input(), 0x7E);
         kb.release(Key::Dot);
@@ -775,8 +741,7 @@ mod tests {
 
     #[test]
     fn shift_labels_match_char_table() {
-        // Cada rótulo de SHIFT de un solo carácter es justo lo que teclea
-        // `key_for_char` con SHIFT delante.
+        // Each one-character SHIFT label is exactly what `key_for_char` types with SHIFT before it.
         for key in Key::ALL {
             if let Some(label) = key.shift_label()
                 && let [byte] = label.as_bytes()

@@ -11,29 +11,25 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// Aviso que se muestra mientras la máquina está apagada (tecla `OFF` o
-/// auto-apagado de la ROM): sin él parecería que el emulador se ha
-/// colgado, con el LCD en blanco.
-const POWERED_OFF_HINT: &str = "Apagada \u{2014} pulsa ON (Esc)";
+/// Notice shown while the machine is off (the `OFF` key or the ROM's automatic power-off): without
+/// it, with the LCD blank, the emulator would look hung.
+const POWERED_OFF_HINT: &str = "Off \u{2014} press ON (Esc)";
 
-/// Límites del slider de velocidad (multiplicador respecto al tiempo
-/// real de hardware). Por encima de unos x150-x400 (según el host y lo
-/// que haga el programa) manda el host, y la etiqueta lo dice.
+/// Limits of the speed slider (multiplier of real hardware time). Above some x150-x400 (depending
+/// on the host and on what the program does) the host rules, and the label says so.
 const SPEED_MIN: f64 = 0.02;
 const SPEED_MAX: f64 = 1000.0;
 
-/// Botones de velocidad rápida, junto al slider.
+/// Quick speed buttons, next to the slider.
 const SPEED_PRESETS: [f64; 9] = [0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 50.0, 100.0];
 
-/// Paso (distancia entre puntos, en puntos lógicos de egui) del LCD
-/// ampliado (casilla "LCD ampliado"), encima de la carátula; si la
-/// ventana es más estrecha, el LCD se encoge. Con 6 la matriz de 156
-/// columnas mide 936 puntos de ancho.
+/// Pitch (distance between dots, in egui's logical points) of the large LCD (the "Large LCD"
+/// checkbox), above the faceplate; if the window is narrower, the LCD shrinks. With 6, the matrix
+/// of 156 columns is 936 points wide.
 const LCD_PITCH: f32 = 6.0;
 
-/// Bits de $764E (ver `Pc1500::lcd_symbol_bytes`) de los prefijos que se
-/// quedan "enganchados" hasta la siguiente tecla: su tecla de la
-/// carátula lleva un contorno mientras tanto.
+/// Bits of $764E (see `Pc1500::lcd_symbol_bytes`) of the prefixes that stay "latched" until the
+/// next key: their key on the faceplate has an outline meanwhile.
 const SYMBOL_SHIFT: u8 = 0x02;
 const SYMBOL_SML: u8 = 0x08;
 const SYMBOL_DEF: u8 = 0x80;
@@ -42,117 +38,107 @@ pub struct Pc1500App {
     // CORE EMULATOR - The real PC-1500 system
     emulator: Pc1500,
 
-    /// Lo que muestra el LCD, copiado del emulador una sola vez por
-    /// actualización (ver `update_emulator`) y pintado por
-    /// `lcd_view::show` en cada repintado.
+    /// What the LCD shows, copied from the emulator only once per update (see `update_emulator`)
+    /// and painted by `lcd_view::show` at each repaint.
     lcd: LcdFrame,
-    /// Casilla "Fantasma LCD": pintar apenas visibles los puntos e
-    /// indicadores apagados, como se ven en un LCD real.
+    /// The "LCD ghosting" checkbox: paint the unlit dots and indicators barely visible, as they
+    /// show on a real LCD.
     lcd_ghost: bool,
-    /// Casilla "LCD ampliado": además del LCD de la carátula, uno grande
-    /// encima (de paso `LCD_PITCH`), para leerlo en ventanas pequeñas.
+    /// The "Large LCD" checkbox: besides the faceplate's LCD, a big one above it (of pitch
+    /// `LCD_PITCH`), to read it in small windows.
     big_lcd: bool,
-    /// La carátula de la PC-1500 (vista principal, ver `faceplate`), con
-    /// sus texturas procedurales ya generadas.
+    /// The PC-1500's faceplate (main view, see `faceplate`), with its procedural textures already
+    /// generated.
     faceplate: Faceplate,
 
-    // TECLADO DEL PC → PC-1500. Ver `host_keymap`: aquí solo se roban los
-    // eventos (`raw_input_hook`) y se pasan al alimentador de teclas del
-    // emulador, que pulsa y suelta en tiempo emulado.
-    /// Traductor de eventos de teclado del host (con la casilla
-    /// "Distinguir mayúsculas/minúsculas" dentro, `exact_case`).
+    // PC KEYBOARD → PC-1500. See `host_keymap`: here the events are only taken (`raw_input_hook`)
+    // and passed to the emulator's key feeder, which presses and releases in emulated time.
+    /// Translator of the host's keyboard events (with the "Match upper/lower case" checkbox inside,
+    /// `exact_case`).
     host_keymap: HostKeymap,
-    /// Eventos de teclado robados a egui en `raw_input_hook`, pendientes
-    /// de traducir en la siguiente `update()`.
+    /// Keyboard events taken from egui in `raw_input_hook`, waiting to be translated in the next
+    /// `update()`.
     host_events: Vec<egui::Event>,
-    /// Casilla "Capturar teclado del PC" (activada por defecto).
+    /// The "Capture the PC keyboard" checkbox (on by default).
     capture_keyboard: bool,
-    /// Si en el último `raw_input_hook` se estaba capturando: al dejar de
-    /// hacerlo (casilla, o foco en un campo de texto) se sueltan todas las
-    /// teclas del host, cuyas sueltas ya no llegarán.
+    /// Whether the last `raw_input_hook` was capturing: when it stops (checkbox, or focus on a text
+    /// field) all the host's keys are released, as their releases will not arrive any more.
     was_capturing: bool,
-    /// Los campos de texto de la interfaz, para no capturar el teclado
-    /// mientras uno tiene el foco. TODOS los `TextEdit` (rutas de
-    /// archivos, presentes y futuros) deben registrarse aquí.
+    /// The GUI's text fields, so as not to capture the keyboard while one has the focus. ALL
+    /// `TextEdit`s (file paths, present and future) must be registered here.
     text_edits: TextEditRegistry,
-    /// La política de mantener teclas en la última `update()` (ver
-    /// `host_keymap::hold_policy`): al cambiar se sueltan todas.
+    /// The policy of holding keys in the last `update()` (see `host_keymap::hold_policy`): when it
+    /// changes, all are released.
     hold_policy: HoldPolicy,
-    /// La tecla de la carátula que tiene pulsada el ratón ahora mismo.
+    /// The key of the faceplate the mouse is pressing right now.
     mouse_key: Option<Pc1500Key>,
-    /// Ventana de ayuda "Teclado".
+    /// The "Keyboard" help window.
     show_key_help: bool,
-    /// Último aviso del teclado (caracteres sin tecla...).
+    /// Last notice of the keyboard (characters with no key...).
     key_status: Option<String>,
 
-    /// Casilla "Auto-apagado" (ver `Pc1500::set_auto_power_off`).
-    /// Activado por defecto, como en la máquina real.
+    /// The "Auto power-off" checkbox (see `Pc1500::set_auto_power_off`). On by default, as on the
+    /// real machine.
     auto_power_off: bool,
 
     // LH5 LOADER - UI state for loading .lh5 files at runtime
     lh5_path_input: String,
     lh5_status: Option<String>,
 
-    // PROGRAMA BASIC - ver `basic_io` y `render_basic_io`.
-    /// Ruta del campo "Programa BASIC" (para cargar y para guardar).
+    // BASIC PROGRAM - see `basic_io` and `render_basic_io`.
+    /// Path of the "BASIC program" field (to load and to save).
     basic_path_input: String,
-    /// Formato elegido en el desplegable.
+    /// Format chosen in the drop-down.
     basic_format: FormatChoice,
-    /// Programa leído esperando a que la ROM llegue al prompt (ver
-    /// `basic_io::PendingLoad`). Sobrevive al botón Reset: así "Reset y
-    /// cargar" funciona sin esperar a mano.
+    /// Program read, waiting for the ROM to reach the prompt (see `basic_io::PendingLoad`). It
+    /// survives the Reset button: so "Reset and load" works without waiting by hand.
     pending_basic: Option<PendingLoad>,
-    /// Último resultado de cargar/guardar.
+    /// Last result of loading/saving.
     basic_status: Option<BasicStatus>,
 
-    // CLOAD/CSAVE DESDE LA PC-1500 - ver `render_host_files` y
-    // `ceres_core::host_io`.
-    /// Campo "Carpeta CLOAD/CSAVE" (al arrancar, la carpeta actual).
+    // CLOAD/CSAVE FROM THE PC-1500 - see `render_host_files` and `ceres_core::host_io`.
+    /// The "CLOAD/CSAVE folder" field (at start, the current folder).
     host_dir_input: String,
-    /// Campo "Cinta": el archivo de `CLOAD`/`CSAVE` sin nombre.
+    /// The "Tape" field: the file of `CLOAD`/`CSAVE` without a name.
     tape_input: String,
-    /// Último evento de los comandos de cinta, o el resultado de cambiar
-    /// la carpeta o la cinta.
+    /// Last event of the tape commands, or the result of changing the folder or the tape.
     host_status: Option<BasicStatus>,
 
-    // TIMING / SPEED CONTROL - ver el comentario de `update()` y de
-    // `pacing`: la emulación va al ritmo real de la PC-1500 (~1.3 MHz)
-    // multiplicado por `speed_multiplier`, no al del repintado del host.
-    /// Multiplicador de velocidad: 1.0 = tiempo real de hardware, <1.0
-    /// más lento (p.ej. 0.1 = 10x más lento, para poder observar con
-    /// calma qué hace un programa), >1.0 más rápido, hasta `SPEED_MAX`.
+    // TIMING / SPEED CONTROL - see the comments of `update()` and of `pacing`: the emulation goes
+    // at the real PC-1500's pace (~1.3 MHz) multiplied by `speed_multiplier`, not at that of the
+    // host's repaints.
+    /// Speed multiplier: 1.0 = real hardware time, <1.0 slower (e.g. 0.1 = 10x slower, to watch
+    /// calmly what a program does), >1.0 faster, up to `SPEED_MAX`.
     speed_multiplier: f64,
-    /// Botón "Máx": emular todo lo que dé el host, sin mirar
-    /// `speed_multiplier` (ver `SpeedMode::Max`).
+    /// The "Max" button: emulate as much as the host gives, without looking at `speed_multiplier`
+    /// (see `SpeedMode::Max`).
     max_speed: bool,
-    /// Planificador de tiempo real: cuántos ciclos emular en cada
-    /// `update()` y la velocidad efectiva medida.
+    /// Real-time scheduler: how many cycles to emulate in each `update()` and the effective speed
+    /// measured.
     pacer: Pacer,
-    /// Si está en pausa, `update()` nunca avanza el emulador por sí solo
-    /// — solo lo hace `step_once` al pulsar el botón de paso.
+    /// If paused, `update()` never moves the emulator on by itself — only `step_once` does it, when
+    /// the step button is clicked.
     paused: bool,
-    /// Puesto a `true` por el botón "Paso" de la UI: fuerza exactamente
-    /// un `update_emulator()` en la siguiente `update()`, incluso en
-    /// pausa — para poder avanzar frame a frame durante un análisis.
+    /// Set to `true` by the GUI's "Step" button: forces exactly one `update_emulator()` in the next
+    /// `update()`, even while paused — to move on frame by frame during an analysis.
     step_once: bool,
 }
 
 impl Pc1500App {
-    /// `startup`: el archivo de la línea de órdenes, ya clasificado por
-    /// su extensión en `main.rs` (ver `basic_io::StartupFile`): un `.lh5`
-    /// se carga en el acto, como siempre; un programa BASIC se pone en la
-    /// cola y entra en cuanto la ROM termina de arrancar.
+    /// `startup`: the file of the command line, already sorted by its extension in `main.rs` (see
+    /// `basic_io::StartupFile`): a `.lh5` is loaded at once, as always; a BASIC program goes in the
+    /// queue and goes in as soon as the ROM finishes booting.
     pub fn new(_cc: &eframe::CreationContext<'_>, startup: Option<StartupFile>, pc1500a: bool) -> Self {
         let mut emulator = if pc1500a { Pc1500::new_pc1500a() } else { Pc1500::new() };
-        // El núcleo arranca con la E/S de archivos desactivada (`ERROR
-        // 27`); en la GUI, `CLOAD`/`CSAVE` usan la carpeta actual.
+        // The core starts with the file I/O disabled (`ERROR 27`); in the GUI, `CLOAD`/`CSAVE` use
+        // the current folder.
         let host_dir = std::env::current_dir().ok();
         let host_dir_input = host_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
         emulator.set_host_dir(host_dir);
 
         let lh5_status = if let Some(StartupFile::Lh5(path)) = &startup {
             match emulator.load_lh5_file(path) {
-                Ok(()) => Some(format!("Cargado: {}", path.display())),
+                Ok(()) => Some(format!("Loaded: {}", path.display())),
                 Err(e) => Some(format!("Error: {e}")),
             }
         } else {
@@ -197,70 +183,65 @@ impl Pc1500App {
         app
     }
 
-    /// Carga un archivo `.lh5` en el emulador y actualiza el mensaje de estado.
+    /// Loads a `.lh5` file into the emulator and updates the status message.
     pub fn load_lh5(&mut self, path: &Path) {
         self.lh5_status = match self.emulator.load_lh5_file(path) {
-            Ok(()) => Some(format!("Cargado: {}", path.display())),
+            Ok(()) => Some(format!("Loaded: {}", path.display())),
             Err(e) => Some(format!("Error: {e}")),
         };
     }
 
-    /// Reinicia el emulador a un estado de arranque limpio (equivalente a
-    /// encenderlo de nuevo) — la única forma de volver al entorno BASIC
-    /// interactivo normal de la ROM tras cargar y ejecutar un `.lh5` de
-    /// código máquina nativo, que deja la CPU parada (`HALT`) sin volver
-    /// nunca al bucle de la ROM. Antes de esto, la única forma era cerrar
-    /// y reabrir la aplicación entera (`Pc1500::new()` solo se llamaba una
-    /// vez, al arrancar `Pc1500App`).
+    /// Restarts the emulator from a clean boot (the same as switching it on again) — the only way
+    /// back to the ROM's normal interactive BASIC after loading and running a `.lh5` of native
+    /// machine code, which leaves the CPU stopped (`HALT`) and never goes back to the ROM's loop.
+    /// Before this, the only way was to close and reopen the whole application (`Pc1500::new()` was
+    /// only called once, when `Pc1500App` started).
     ///
-    /// Usa `Pc1500::reset()`, no un `Pc1500::new()` nuevo: así sobrevive
-    /// lo que en la máquina real no se pierde con un reset (el reloj, con
-    /// una hora puesta con `TIME=`, que tiene su propia pila) y las
-    /// opciones del emulador. La lista completa está en `Pc1500::reset`;
-    /// el alimentador de teclas (teclas del host pulsadas, texto pegado
-    /// pendiente) NO sobrevive. Aquí solo se limpia además el estado
-    /// propio de la GUI (tecla del ratón, ritmo y medida de velocidad del
-    /// `Pacer`). La velocidad elegida (slider, "Máx") se conserva.
+    /// It uses `Pc1500::reset()`, not a new `Pc1500::new()`: so what the real machine does not lose
+    /// with a reset (the clock, with a time set with `TIME=`, which has its own battery) and the
+    /// emulator's options survive, and so does the model (PC-1500 or PC-1500A). The complete list
+    /// is in `Pc1500::reset`; the key feeder (host keys down, pasted text pending) does NOT
+    /// survive. Here only the GUI's own state is cleared as well (the mouse's key, the `Pacer`'s
+    /// pace and speed measurement). The chosen speed (slider, "Max") is kept.
     pub fn reset(&mut self) {
         self.emulator.reset();
         self.emulator.set_auto_power_off(self.auto_power_off);
         self.mouse_key = None;
         self.key_status = None;
-        self.lh5_status = Some("Emulador reiniciado".to_string());
+        self.lh5_status = Some("Emulator restarted".to_string());
         self.pacer.pause();
     }
 
-    /// Lee e interpreta un programa BASIC de `path` y lo pone en la cola
-    /// (ver `basic_io`). Los errores de lectura o de formato se ven en el
-    /// estado sin tocar la máquina.
+    /// Reads and interprets a BASIC program from `path` and puts it in the queue (see `basic_io`).
+    /// Read or format errors show in the status without touching the machine.
     fn queue_basic_file(&mut self, path: &Path) {
         match std::fs::read(path) {
             Ok(bytes) => self.queue_basic_bytes(&bytes, path),
-            Err(e) => self.basic_status = Some(BasicStatus::error(format!("Error al leer {}: {e}", path.display()))),
+            Err(e) => self.basic_status = Some(BasicStatus::error(format!("Error reading {}: {e}", path.display()))),
         }
     }
 
-    /// Como `queue_basic_file` con los bytes ya leídos (archivos soltados
-    /// que solo traen los bytes); `path` decide la extensión.
+    /// As `queue_basic_file` with the bytes already read (dropped files that only bring the bytes);
+    /// `path` decides the extension.
     fn queue_basic_bytes(&mut self, bytes: &[u8], path: &Path) {
         let keywords = self.emulator.basic_keywords();
         match basic_io::decode(bytes, path, self.basic_format, &keywords) {
             Ok(decoded) => {
                 self.basic_status = Some(BasicStatus::waiting(format!(
-                    "Esperando al prompt BASIC para cargar {}\u{2026}",
+                    "Waiting for the BASIC prompt to load {}\u{2026}",
                     path.display()
                 )));
                 self.pending_basic = Some(PendingLoad::new(decoded, path.display().to_string()));
             }
             Err(e) => {
                 self.pending_basic = None;
-                self.basic_status = Some(BasicStatus::error(format!("Error en {}: {e}", path.display())));
+                self.basic_status = Some(BasicStatus::error(format!("Error in {}: {e}", path.display())));
             }
         }
     }
 
-    /// Mete en la máquina el programa de la cola si la ROM ya está en el
-    /// prompt (se llama tras cada avance de la emulación).
+    /// Puts the queue's program into the machine if the ROM is already at the prompt (called after
+    /// each step of the emulation).
     fn apply_pending_basic(&mut self) {
         let Some(pending) = &mut self.pending_basic else {
             return;
@@ -283,35 +264,34 @@ impl Pc1500App {
                         let text = basic_io::load_status(ready.source(), decoded.format, &report, cold);
                         if report.warnings.is_empty() { BasicStatus::ok(text) } else { BasicStatus::waiting(text) }
                     }
-                    Err(e) => BasicStatus::error(format!("Error al cargar {}: {e}", ready.source())),
+                    Err(e) => BasicStatus::error(format!("Error loading {}: {e}", ready.source())),
                 });
             }
         }
     }
 
-    /// Guarda el programa de la máquina en la ruta del campo.
+    /// Saves the machine's program to the field's path.
     fn save_basic(&mut self) {
         let path = PathBuf::from(self.basic_path_input.trim());
         if path.as_os_str().is_empty() {
-            self.basic_status = Some(BasicStatus::error("Escribe la ruta del archivo".to_owned()));
+            self.basic_status = Some(BasicStatus::error("Type the file's path".to_owned()));
             return;
         }
         self.basic_status = Some(match self.emulator.save_basic_file(&path, self.basic_format.save_format()) {
             Ok(report) => BasicStatus::ok(format!(
-                "Guardado {} ({}): {} l\u{ed}neas, {} bytes",
+                "Saved {} ({}): {} lines, {} bytes",
                 path.display(),
                 basic_io::save_format_name(report.format),
                 report.lines,
                 report.bytes
             )),
-            Err(e) => BasicStatus::error(format!("Error al guardar {}: {e}", path.display())),
+            Err(e) => BasicStatus::error(format!("Error saving {}: {e}", path.display())),
         });
     }
 
-    /// Archivos soltados sobre la ventana: un `.lh5` (o extensión
-    /// desconocida) se carga como código máquina, un programa BASIC va a
-    /// la cola. Puede no funcionar en Wayland (winit no siempre entrega
-    /// los archivos soltados); el campo de ruta funciona siempre.
+    /// Files dropped on the window: a `.lh5` (or an unknown extension) is loaded as machine code, a
+    /// BASIC program goes to the queue. It may not work on Wayland (winit does not always deliver
+    /// the dropped files); the path field always works.
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for file in dropped {
@@ -327,22 +307,22 @@ impl Pc1500App {
                 }
                 (StartupFile::Basic(_), None, Some(bytes)) => self.queue_basic_bytes(&bytes, &path),
                 _ => {
-                    self.basic_status = Some(BasicStatus::error(format!("No se puede abrir {}", path.display())));
+                    self.basic_status = Some(BasicStatus::error(format!("{} cannot be opened", path.display())));
                 }
             }
         }
     }
 
-    /// Panel "Programa BASIC": ruta (registrada para no capturar el
-    /// teclado mientras tiene el foco), formato, Cargar/Guardar y estado.
+    /// The "BASIC program" panel: path (registered so as not to capture the keyboard while it has
+    /// the focus), format, Load/Save and status.
     fn render_basic_io(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label("Programa BASIC:");
+                ui.label("BASIC program:");
                 let response = self.text_edits.add(
                     ui,
                     egui::TextEdit::singleline(&mut self.basic_path_input)
-                        .hint_text("ruta/al/programa.bas")
+                        .hint_text("path/to/program.bas")
                         .desired_width(300.0),
                 );
                 let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -356,27 +336,27 @@ impl Pc1500App {
                     })
                     .response
                     .on_hover_text(
-                        "Auto: al cargar se reconoce el contenido (texto, tokenizado o cabecera \
-                         CE-158); al guardar manda la extensi\u{f3}n: .bas CE-158 (como CSAVE), \
-                         .asc texto CR (CE-158X), .txt texto CRLF, .bin tokenizado sin cabecera",
+                        "Auto: when loading, the contents are recognized (text, tokenized or CE-158 \
+                         header); when saving, the extension rules: .bas CE-158 (as CSAVE), \
+                         .asc CR text (CE-158X), .txt CRLF text, .bin tokenized without header",
                     );
 
                 let load = ui
-                    .button("Cargar BASIC")
+                    .button("Load BASIC")
                     .on_hover_text(
-                        "Sustituye el programa de la PC-1500 (como NEW y teclearlo). Espera al \
-                         prompt BASIC si la m\u{e1}quina est\u{e1} arrancando. Tambi\u{e9}n se puede \
-                         soltar el archivo sobre la ventana.",
+                        "Replaces the PC-1500's program (as NEW and typing it). It waits for the \
+                         BASIC prompt if the machine is booting. The file can also be \
+                         dropped on the window.",
                     )
                     .clicked();
                 if load || enter {
                     let path = PathBuf::from(self.basic_path_input.trim());
                     self.queue_basic_file(&path);
                 }
-                if ui.button("Guardar BASIC").on_hover_text("Guarda el programa de la PC-1500 en la ruta").clicked() {
+                if ui.button("Save BASIC").on_hover_text("Saves the PC-1500's program to the path").clicked() {
                     self.save_basic();
                 }
-                if self.pending_basic.is_some() && ui.button("Cancelar carga").clicked() {
+                if self.pending_basic.is_some() && ui.button("Cancel load").clicked() {
                     self.pending_basic = None;
                     self.basic_status = None;
                 }
@@ -387,40 +367,38 @@ impl Pc1500App {
         });
     }
 
-    /// Panel "CLOAD/CSAVE": la carpeta de los archivos de `CLOAD`,
-    /// `CSAVE`, `MERGE` y `CHAIN` tecleados en la PC-1500, el archivo de
-    /// "cinta" para los que no llevan nombre y el resultado del último.
-    /// Los dos campos están registrados para no capturar el teclado
-    /// mientras tienen el foco.
+    /// The "CLOAD/CSAVE" panel: the folder of the files of `CLOAD`, `CSAVE`, `MERGE` and `CHAIN`
+    /// typed on the PC-1500, the "tape" file for those without a name and the result of the last
+    /// one. Both fields are registered so as not to capture the keyboard while they have the focus.
     fn render_host_files(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label("Carpeta CLOAD/CSAVE:").on_hover_text(HOST_FILES_HELP);
+                ui.label("CLOAD/CSAVE folder:").on_hover_text(HOST_FILES_HELP);
                 let dir_field = self.text_edits.add(
                     ui,
                     egui::TextEdit::singleline(&mut self.host_dir_input)
-                        .hint_text("vac\u{ed}o = desactivado (ERROR 27)")
+                        .hint_text("empty = disabled (ERROR 27)")
                         .desired_width(260.0),
                 );
                 let dir_enter = dir_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("Usar").on_hover_text(HOST_FILES_HELP).clicked() || dir_enter {
+                if ui.button("Use").on_hover_text(HOST_FILES_HELP).clicked() || dir_enter {
                     self.apply_host_dir();
                 }
 
                 ui.separator();
 
-                ui.label("Cinta:").on_hover_text(
-                    "Archivo de CLOAD y CSAVE sin nombre (p. ej. CSAVE a secas). Sin cinta, \
-                     dan ERROR 40.",
+                ui.label("Tape:").on_hover_text(
+                    "File of CLOAD and CSAVE without a name (e.g. a bare CSAVE). Without a tape, \
+                     they give ERROR 40.",
                 );
                 let tape_field = self.text_edits.add(
                     ui,
                     egui::TextEdit::singleline(&mut self.tape_input)
-                        .hint_text("ruta/a/cinta.bas")
+                        .hint_text("path/to/tape.bas")
                         .desired_width(200.0),
                 );
                 let tape_enter = tape_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("Usar cinta").clicked() || tape_enter {
+                if ui.button("Use tape").clicked() || tape_enter {
                     self.apply_tape();
                 }
             });
@@ -430,33 +408,33 @@ impl Pc1500App {
         });
     }
 
-    /// Botón "Usar" de la carpeta (ver `parse_host_dir`).
+    /// The folder's "Use" button (see `parse_host_dir`).
     fn apply_host_dir(&mut self) {
         self.host_status = Some(match parse_host_dir(&self.host_dir_input) {
             Ok(Some(dir)) => {
-                let text = format!("CLOAD/CSAVE en {}", dir.display());
+                let text = format!("CLOAD/CSAVE in {}", dir.display());
                 self.emulator.set_host_dir(Some(dir));
                 BasicStatus::ok(text)
             }
             Ok(None) => {
                 self.emulator.set_host_dir(None);
-                BasicStatus::waiting("CLOAD/CSAVE desactivados (dan ERROR 27)".to_owned())
+                BasicStatus::waiting("CLOAD/CSAVE disabled (they give ERROR 27)".to_owned())
             }
             Err(e) => BasicStatus::error(e),
         });
     }
 
-    /// Botón "Usar cinta".
+    /// The "Use tape" button.
     fn apply_tape(&mut self) {
         let tape = parse_tape(&self.tape_input);
         self.host_status = Some(tape.as_ref().map_or_else(
-            || BasicStatus::waiting("Sin cinta: CLOAD/CSAVE sin nombre dan ERROR 40".to_owned()),
-            |path| BasicStatus::ok(format!("Cinta: {}", path.display())),
+            || BasicStatus::waiting("No tape: CLOAD/CSAVE without a name give ERROR 40".to_owned()),
+            |path| BasicStatus::ok(format!("Tape: {}", path.display())),
         ));
         self.emulator.set_tape(tape);
     }
 
-    /// La velocidad pedida en la interfaz.
+    /// The speed asked for in the GUI.
     const fn speed_mode(&self) -> SpeedMode {
         if self.max_speed {
             SpeedMode::Max
@@ -465,9 +443,9 @@ impl Pc1500App {
         }
     }
 
-    /// Avanza la emulación lo que toque en este `update()` (ver
-    /// `pacing::Pacer`), o exactamente un frame si se pulsó "Paso".
-    /// Devuelve `true` si la emulación está corriendo (no en pausa).
+    /// Moves the emulation on as much as is due in this `update()` (see `pacing::Pacer`), or
+    /// exactly one frame if "Step" was clicked. It returns `true` if the emulation is running (not
+    /// paused).
     fn advance_emulation(&mut self, ctx: &egui::Context) -> bool {
         if self.step_once {
             self.step_once = false;
@@ -494,27 +472,24 @@ impl Pc1500App {
         true
     }
 
-    /// Casillas del LCD ("Fantasma LCD", "LCD ampliado") y el aviso de
-    /// máquina apagada, en el panel de controles. El LCD en sí va en la
-    /// carátula (ver `render_faceplate`).
+    /// The LCD's checkboxes ("LCD ghosting", "Large LCD") and the notice of the machine being off,
+    /// in the control panel. The LCD itself goes in the faceplate (see `render_faceplate`).
     fn render_display_options(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.lcd_ghost, "Fantasma LCD").on_hover_text(
-            "Muestra apenas visibles los puntos e indicadores apagados, como en un LCD real",
+        ui.checkbox(&mut self.lcd_ghost, "LCD ghosting").on_hover_text(
+            "Shows the unlit dots and indicators barely visible, as on a real LCD",
         );
-        ui.checkbox(&mut self.big_lcd, "LCD ampliado")
-            .on_hover_text("Muestra tambi\u{e9}n el LCD en grande, encima de la car\u{e1}tula");
+        ui.checkbox(&mut self.big_lcd, "Large LCD")
+            .on_hover_text("Also shows the LCD large, above the faceplate");
         if !self.emulator.is_powered_on() {
             ui.colored_label(egui::Color32::RED, egui::RichText::new(POWERED_OFF_HINT).strong());
         }
     }
 
-    /// Pasa al emulador lo que se tecleó en el PC desde la última
-    /// `update()` (ver `host_keymap`), antes de emular nada.
+    /// Passes to the emulator what was typed on the PC since the last `update()` (see
+    /// `host_keymap`), before emulating anything.
     fn handle_host_keyboard(&mut self) {
-        // Al cruzar 1x cambia cómo se mantienen las teclas (ver
-        // `HoldPolicy`): lo que estuviera pulsado se da por soltado, para
-        // que ninguna se quede pegada esperando una suelta que en modo
-        // `Tap` se ignora.
+        // On crossing 1x, how keys are held changes (see `HoldPolicy`): whatever was down is taken
+        // as released, so that none gets stuck waiting for a release that in `Tap` mode is ignored.
         let policy = host_keymap::hold_policy(self.max_speed, self.speed_multiplier);
         if policy != self.hold_policy {
             self.emulator.release_all_host_keys();
@@ -532,21 +507,20 @@ impl Pc1500App {
         }
     }
 
-    /// Las casillas del teclado, la ayuda y el estado del tecleo, en el
-    /// panel de controles.
+    /// The keyboard's checkboxes, the help and the state of the typing, in the control panel.
     fn render_keyboard_options(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.capture_keyboard, "Capturar teclado del PC").on_hover_text(
-                "Lo que se teclea en el PC va a la PC-1500 (salvo con el foco en un campo de \
-                 texto). Sin esto, solo las teclas de la car\u{e1}tula.",
+            ui.checkbox(&mut self.capture_keyboard, "Capture the PC keyboard").on_hover_text(
+                "What is typed on the PC goes to the PC-1500 (except with the focus on a text \
+                 field). Without this, only the faceplate's keys.",
             );
-            ui.checkbox(self.host_keymap.exact_case_mut(), "Distinguir may\u{fa}sculas/min\u{fa}sculas")
+            ui.checkbox(self.host_keymap.exact_case_mut(), "Match upper/lower case")
                 .on_hover_text(
-                    "Apagado: cada letra es la tecla de la PC-1500 tal cual (MAY\u{da}SCULA, como \
-                     piden las palabras clave de BASIC; min\u{fa}sculas con SML = F8 o SHIFT = F11). \
-                     Encendido: las letras salen como en el PC.",
+                    "Off: each letter is the PC-1500 key as it is (UPPERCASE, as BASIC's \
+                     keywords want; lowercase with SML = F8 or SHIFT = F11). \
+                     On: the letters come out as on the PC.",
                 );
-            if ui.button("\u{2328} Teclado").on_hover_text("Qu\u{e9} tecla del PC es cada tecla de la PC-1500").clicked() {
+            if ui.button("\u{2328} Keyboard").on_hover_text("Which PC key is each PC-1500 key").clicked() {
                 self.show_key_help = !self.show_key_help;
             }
             ui.separator();
@@ -554,8 +528,8 @@ impl Pc1500App {
             let pending = self.emulator.pending_keystrokes();
             if pending > 0 {
                 ui.separator();
-                ui.label(format!("Tecleando\u{2026} {pending} pendientes"));
-                if ui.button("Cancelar tecleo").clicked() {
+                ui.label(format!("Typing\u{2026} {pending} pending"));
+                if ui.button("Cancel typing").clicked() {
                     self.emulator.cancel_typing();
                 }
             }
@@ -565,14 +539,11 @@ impl Pc1500App {
         });
     }
 
-    /// La carátula (ver `faceplate`): LCD y teclas, ocupando todo el
-    /// espacio que queda. Una tecla se ve hundida mientras está pulsada
-    /// en el teclado emulado (con el ratón o con el teclado del PC, ver
-    /// `Pc1500::is_key_pressed`) o mientras el ratón la tiene pulsada,
-    /// aunque el alimentador todavía no la haya pasado a la matriz (a
-    /// poca velocidad tarda un poco en tiempo de host). Los prefijos
-    /// enganchados (`SHIFT`, `SML`, `DEF`, bits de $764E) llevan un
-    /// contorno hasta la tecla siguiente.
+    /// The faceplate (see `faceplate`): LCD and keys, taking all the room left. A key shows pressed
+    /// while it is down in the emulated keyboard (with the mouse or with the PC's keyboard, see
+    /// `Pc1500::is_key_pressed`) or while the mouse is pressing it, even if the feeder has not
+    /// passed it to the matrix yet (at low speed it takes a little in host time). Latched prefixes
+    /// (`SHIFT`, `SML`, `DEF`, bits of $764E) have an outline until the next key.
     fn render_faceplate(&mut self, ui: &mut egui::Ui) {
         let symbols = self.emulator.lcd_symbol_bytes()[0];
         let emulator = &self.emulator;
@@ -591,14 +562,12 @@ impl Pc1500App {
         self.update_mouse_key(output.pointer_key);
     }
 
-    /// El ratón sobre las teclas de la carátula: al pulsar una tecla se
-    /// mantiene pulsada en la PC-1500 hasta soltar el botón (aunque el
-    /// puntero salga de la tecla, como con `is_pointer_button_down_on`),
-    /// igual que una tecla del PC, a través del mismo alimentador (así
-    /// funcionan la autorrepetición de las flechas y los juegos con
-    /// `INKEY$`). Aquí solo se detectan los flancos: cuánto dura como
-    /// mínimo cada pulsación lo decide el alimentador en tiempo emulado
-    /// (o la política `Tap` por encima de 1x), no un tiempo del host.
+    /// The mouse on the faceplate's keys: pressing a key holds it down on the PC-1500 until the
+    /// button is released (even if the pointer leaves the key, as with
+    /// `is_pointer_button_down_on`), as a PC key, through the same feeder (that is how the arrows'
+    /// key repeat and the games with `INKEY$` work). Only the edges are detected here: how long
+    /// each key press lasts at least is decided by the feeder in emulated time (or by the `Tap`
+    /// policy above 1x), not by a host time.
     fn update_mouse_key(&mut self, pointer_on: Option<Pc1500Key>) {
         if pointer_on == self.mouse_key {
             return;
@@ -622,19 +591,18 @@ impl Pc1500App {
         }
     }
 
-    /// Ventana "Teclado PC → PC-1500": las tablas de `host_keymap` tal
-    /// cual, para que la ayuda no pueda contar algo distinto de lo que
-    /// pasa.
+    /// The "PC keyboard → PC-1500" window: the tables of `host_keymap` as they are, so that the
+    /// help cannot tell something different from what happens.
     fn render_key_help(&mut self, ctx: &egui::Context) {
         let mut open = self.show_key_help;
-        egui::Window::new("Teclado PC \u{2192} PC-1500")
+        egui::Window::new("PC keyboard \u{2192} PC-1500")
             .open(&mut open)
             .default_width(560.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
                     ui.label(KEY_HELP_NOTES);
                     ui.separator();
-                    ui.strong("Teclas especiales");
+                    ui.strong("Special keys");
                     egui::Grid::new("key_help_special").striped(true).show(ui, |ui| {
                         ui.strong("PC");
                         ui.strong("PC-1500");
@@ -654,13 +622,13 @@ impl Pc1500App {
                         }
                     });
                     ui.separator();
-                    ui.strong("Caracteres (con cualquier distribuci\u{f3}n de teclado del PC)");
+                    ui.strong("Characters (with any PC keyboard layout)");
                     egui::Grid::new("key_help_chars").striped(true).show(ui, |ui| {
                         for (index, (host, sequence)) in host_keymap::char_table().iter().enumerate() {
                             ui.monospace(host);
                             match sequence {
                                 Some(sequence) => ui.label(sequence),
-                                None => ui.weak("sin tecla"),
+                                None => ui.weak("no key"),
                             };
                             if index % 4 == 3 {
                                 ui.end_row();
@@ -672,30 +640,28 @@ impl Pc1500App {
         self.show_key_help = open;
     }
 
-    /// Control de velocidad: pausa, paso a paso, un slider logarítmico de
-    /// multiplicador respecto al tiempo real de hardware (`1.00x`) de
-    /// `SPEED_MIN` a `SPEED_MAX`, botones de velocidades típicas, el
-    /// botón "Máx" (todo lo que dé el host) y la velocidad efectiva
-    /// medida, que avisa cuando el host no da para la pedida. Ver
-    /// `pacing`.
+    /// Speed control: pause, step by step, a logarithmic slider of the multiplier of real hardware
+    /// time (`1.00x`) from `SPEED_MIN` to `SPEED_MAX`, buttons of usual speeds, the "Max" button
+    /// (as much as the host gives) and the effective speed measured, which warns when the host
+    /// cannot keep up with the one asked for. See `pacing`.
     fn render_speed_control(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal_wrapped(|ui| {
                 let pause_label = if self.paused {
-                    "\u{25b6} Reanudar"
+                    "\u{25b6} Resume"
                 } else {
-                    "\u{23f8} Pausa"
+                    "\u{23f8} Pause"
                 };
                 if ui.button(pause_label).clicked() {
                     self.paused = !self.paused;
-                    // En pausa no se piden repintados (ver `update`): que
-                    // el siguiente llegue ya, sin esperar a otro evento.
+                    // While paused, no repaints are requested (see `update`): let the next one come
+                    // now, without waiting for another event.
                     ui.ctx().request_repaint();
                 }
 
                 if ui
-                    .add_enabled(self.paused, egui::Button::new("\u{23ed} Paso"))
-                    .on_hover_text("Avanzar exactamente un frame emulado (~11.5 ms de la PC-1500)")
+                    .add_enabled(self.paused, egui::Button::new("\u{23ed} Step"))
+                    .on_hover_text("Move on exactly one emulated frame (~11.5 ms of the PC-1500)")
                     .clicked()
                 {
                     self.step_once = true;
@@ -704,12 +670,11 @@ impl Pc1500App {
 
                 ui.separator();
 
-                ui.label("Velocidad:");
-                // Sin la casilla numérica del slider (`show_value(false)`):
-                // al pulsarla, egui la convierte en un campo de texto que
-                // no está en `text_edits`, y `raw_input_hook` le robaría las
-                // teclas para mandarlas a la PC-1500. El valor se muestra
-                // aparte como etiqueta.
+                ui.label("Speed:");
+                // Without the slider's numeric field (`show_value(false)`): when clicked, egui
+                // turns it into a text field that is not in `text_edits`, and `raw_input_hook`
+                // would take its keys to send them to the PC-1500. The value is shown apart as a
+                // label.
                 ui.add_enabled(
                     !self.max_speed,
                     egui::Slider::new(&mut self.speed_multiplier, SPEED_MIN..=SPEED_MAX)
@@ -725,10 +690,10 @@ impl Pc1500App {
                         self.max_speed = false;
                     }
                 }
-                ui.toggle_value(&mut self.max_speed, "\u{23e9} M\u{e1}x")
+                ui.toggle_value(&mut self.max_speed, "\u{23e9} Max")
                     .on_hover_text(
-                        "Emula todo lo que d\u{e9} el ordenador, sin l\u{ed}mite de velocidad \
-                         (la interfaz puede ir algo menos fluida)",
+                        "Emulates as much as the computer gives, without a speed limit \
+                         (the GUI may be somewhat less smooth)",
                     );
 
                 ui.separator();
@@ -737,11 +702,11 @@ impl Pc1500App {
                 ui.separator();
 
                 if ui
-                    .checkbox(&mut self.auto_power_off, "Auto-apagado")
+                    .checkbox(&mut self.auto_power_off, "Auto power-off")
                     .on_hover_text(
-                        "Como la PC-1500 real: se apaga sola tras unos 5 minutos sin pulsar \
-                         ninguna tecla (antes si la velocidad es mayor de 1x). ON (Esc) la \
-                         vuelve a encender donde estaba.",
+                        "As the real PC-1500: it switches itself off after some 5 minutes without any \
+                         key pressed (sooner if the speed is above 1x). ON (Esc) switches it \
+                         on again where it was.",
                     )
                     .changed()
                 {
@@ -751,20 +716,20 @@ impl Pc1500App {
         });
     }
 
-    /// La velocidad efectiva medida por el `Pacer` (ver
-    /// `speed_status_text`), en naranja si la limita el host.
+    /// The effective speed measured by the `Pacer` (see `speed_status_text`), in orange if the host
+    /// limits it.
     fn render_measured_speed(&self, ui: &mut egui::Ui) {
         let measurement = self.pacer.measurement();
         let status = speed_status_text(self.paused, self.max_speed, measurement);
         ui.label(status.measured).on_hover_text(
-            "Velocidad real conseguida (medida cada 0.5 s): m\u{fa}ltiplo del tiempo real de \
-             la PC-1500 y ciclos de CPU emulados por segundo (la real va a 1.3 MHz)",
+            "Real speed achieved (measured every 0.5 s): multiple of the PC-1500's real \
+             time and emulated CPU cycles per second (the real one runs at 1.3 MHz)",
         );
         if let Some(warning) = status.warning {
             ui.colored_label(egui::Color32::from_rgb(0xE0, 0x80, 0x10), warning)
                 .on_hover_text(
-                    "El ordenador no da para emular a la velocidad pedida: va a la que se \
-                     indica",
+                    "The computer cannot emulate at the speed asked for: it runs at the one \
+                     shown",
                 );
         }
     }
@@ -772,14 +737,14 @@ impl Pc1500App {
     fn render_lh5_loader(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label("Archivo .lh5:");
+                ui.label(".lh5 file:");
 
-                // Registrado: mientras tenga el foco, el teclado no va a
-                // la PC-1500 (ver `TextEditRegistry`).
+                // Registered: while it has the focus, the keyboard does not go to the PC-1500 (see
+                // `TextEditRegistry`).
                 let response = self.text_edits.add(
                     ui,
                     egui::TextEdit::singleline(&mut self.lh5_path_input)
-                        .hint_text("ruta/al/programa.lh5")
+                        .hint_text("path/to/program.lh5")
                         .desired_width(300.0),
                 );
 
@@ -789,14 +754,14 @@ impl Pc1500App {
                     self.load_lh5(&path);
                 }
 
-                if ui.button("Cargar").clicked() {
+                if ui.button("Load").clicked() {
                     let path = std::path::PathBuf::from(self.lh5_path_input.clone());
                     self.load_lh5(&path);
                 }
 
                 if ui
                     .button("Reset")
-                    .on_hover_text("Reinicia el emulador a un arranque limpio (vuelve al entorno BASIC normal de la ROM)")
+                    .on_hover_text("Restarts the emulator from a clean boot (back to the ROM's normal BASIC)")
                     .clicked()
                 {
                     self.reset();
@@ -804,14 +769,14 @@ impl Pc1500App {
 
                 ui.separator();
 
-                // Hora del reloj µPD1990AC, la misma que leería `TIME`.
-                ui.label(format!("Reloj: {}", self.emulator.rtc_now()))
+                // Time of the µPD1990AC clock, the same that `TIME` would read.
+                ui.label(format!("Clock: {}", self.emulator.rtc_now()))
                     .on_hover_text(
-                        "La hora que lee TIME (d\u{ed}a/mes hora). Empieza en la hora local del \
-                         ordenador y avanza en tiempo real, a cualquier velocidad de emulaci\u{f3}n, \
-                         como el reloj con pila de la PC-1500 (WAIT y BEEP s\u{ed} siguen la \
-                         velocidad). TIME=MMDDHH.MMSS la cambia; se conserva con Reset, no al \
-                         cerrar el emulador.",
+                        "The time TIME reads (day/month time). It starts at the computer's local \
+                         time and moves on in real time, at any emulation speed, \
+                         as the PC-1500's battery-backed clock (WAIT and BEEP do follow the \
+                         speed). TIME=MMDDHH.MMSS changes it; it is kept by Reset, not when \
+                         closing the emulator.",
                     );
             });
 
@@ -828,13 +793,11 @@ impl Pc1500App {
 }
 
 impl eframe::App for Pc1500App {
-    /// Roba los eventos de teclado antes de que los procese egui (ver
-    /// `host_keymap::capture_events`), salvo si la captura está
-    /// desactivada o un campo de texto registrado tiene el foco.
+    /// Takes the keyboard events before egui processes them (see `host_keymap::capture_events`),
+    /// unless the capture is disabled or a registered text field has the focus.
     ///
-    /// Se ejecuta antes de `update()` (eframe lo llama antes de empezar
-    /// el pase de egui): el foco que se mira es el del repintado
-    /// anterior, igual que los campos registrados.
+    /// It runs before `update()` (eframe calls it before starting egui's pass): the focus looked at
+    /// is that of the previous repaint, as are the registered fields.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let focused = ctx.memory(egui::Memory::focused);
         let capturing = self.capture_keyboard && self.text_edits.allows_capture(focused);
@@ -843,64 +806,58 @@ impl eframe::App for Pc1500App {
                 .extend(host_keymap::capture_events(&mut raw_input.events));
         }
         if self.was_capturing && !capturing {
-            // Las sueltas de lo que siguiera pulsado ya no van a llegar.
+            // The releases of whatever was still down will not arrive any more.
             self.host_events.push(egui::Event::WindowFocused(false));
         }
         self.was_capturing = capturing;
     }
 
-    /// Emula lo que toque y pinta la interfaz.
+    /// Emulates what is due and paints the GUI.
     ///
-    /// # Historia del ritmo
-    /// Al principio esto hacía un `step_frame()` por repintado, sin mirar
-    /// el reloj: la velocidad quedaba atada al vsync del monitor. Luego
-    /// se ritmó con `FRAME_DURATION`, pero como mucho UN frame emulado
-    /// (~11.5 ms) por repintado (~16.7 ms a 60 Hz), así que la emulación
-    /// no pasaba de ~0.69x por mucho que se pidiera. Ahora el
-    /// `pacing::Pacer` emula en cada `update()` los ciclos que tocan por
-    /// el tiempo real transcurrido (de ~433 a 0.02x hasta millones en
-    /// modo Máx), con un presupuesto de tiempo de host para que la
-    /// interfaz siga respondiendo.
+    /// # History of the pacing
+    /// At first this did one `step_frame()` per repaint, without looking at the clock: the speed
+    /// was tied to the monitor's vsync. Then it was paced with `FRAME_DURATION`, but at most ONE
+    /// emulated frame (~11.5 ms) per repaint (~16.7 ms at 60 Hz), so the emulation did not go
+    /// beyond ~0.69x however much was asked for. Now the `pacing::Pacer` emulates in each
+    /// `update()` the cycles due for the real time elapsed (from ~433 at 0.02x to millions in Max
+    /// mode), with a budget of host time so that the GUI stays responsive.
     ///
-    /// Mientras corre se pide siempre el siguiente repintado
-    /// (`request_repaint`): el vsync ya limita a la frecuencia del
-    /// monitor, y así incluso a 0.02x la emulación avanza un poco en cada
-    /// frame de la interfaz en vez de a saltos. En pausa no hace falta:
-    /// egui repinta solo al haber eventos.
+    /// While it runs, the next repaint is always requested (`request_repaint`): the vsync already
+    /// limits it to the monitor's frequency, and so even at 0.02x the emulation moves on a little
+    /// at each frame of the GUI instead of in jumps. While paused it is not needed: egui repaints
+    /// by itself when there are events.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Teclado del PC primero (en tiempo emulado lo pulsa el
-        // alimentador, dentro de `run_for_ticks`).
+        // The PC's keyboard first (in emulated time the feeder presses it, inside `run_for_ticks`).
         self.handle_host_keyboard();
         self.handle_dropped_files(ctx);
-        // Los campos de texto se vuelven a registrar al dibujarlos.
+        // The text fields are registered again when they are drawn.
         self.text_edits.clear();
 
         if self.advance_emulation(ctx) {
             ctx.request_repaint();
         }
-        // La carga BASIC pendiente, en cuanto la ROM llegue al prompt.
+        // The pending BASIC load, as soon as the ROM reaches the prompt.
         self.apply_pending_basic();
-        // Lo que hayan hecho CLOAD/CSAVE en la PC-1500: se ve el último.
+        // What CLOAD/CSAVE have done on the PC-1500: the last one shows.
         if let Some(event) = self.emulator.take_host_events().last() {
             self.host_status = Some(host_event_status(event));
         }
 
-        // Una única instantánea del LCD por actualización (ver
-        // `Pc1500::display`), pintada luego por `lcd_view::show`.
+        // A single snapshot of the LCD per update (see `Pc1500::display`), painted later by
+        // `lcd_view::show`.
         self.lcd = LcdFrame::from_display(self.emulator.display());
 
-        // Arriba, el panel de controles (velocidad, cargadores, casillas
-        // del teclado y del LCD); el resto de la ventana es para la
-        // carátula, que se escala para llenarlo (ver `faceplate`). Los
-        // paneles de archivos BASIC y CLOAD/CSAVE se pueden plegar para
-        // dejarle más sitio.
+        // At the top, the control panel (speed, loaders, the keyboard's and the LCD's checkboxes);
+        // the rest of the window is for the faceplate, which is scaled to fill it (see
+        // `faceplate`). The panels of BASIC files and of CLOAD/CSAVE can be folded to leave it more
+        // room.
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
             ui.add_space(2.0);
-            // Control de velocidad (pausa/paso/multiplicador)
+            // Speed control (pause/step/multiplier)
             self.render_speed_control(ui);
-            // Cargador .lh5, Reset y reloj
+            // .lh5 loader, Reset and clock
             self.render_lh5_loader(ui);
-            egui::CollapsingHeader::new("Programas BASIC y CLOAD/CSAVE")
+            egui::CollapsingHeader::new("BASIC programs and CLOAD/CSAVE")
                 .id_salt("files_panel")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -923,7 +880,7 @@ impl eframe::App for Pc1500App {
     }
 }
 
-/// Estado del panel "Programa BASIC".
+/// Status of the "BASIC program" panel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BasicStatus {
     kind: StatusKind,
@@ -933,7 +890,7 @@ struct BasicStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusKind {
     Ok,
-    /// En espera, o hecho pero con avisos.
+    /// Waiting, or done but with warnings.
     Attention,
     Error,
 }
@@ -960,19 +917,18 @@ impl BasicStatus {
     }
 }
 
-/// Ayuda del panel "CLOAD/CSAVE".
+/// Help of the "CLOAD/CSAVE" panel.
 const HOST_FILES_HELP: &str = "\
-Carpeta de los archivos de CLOAD, CSAVE, MERGE y CHAIN tecleados en la PC-1500 \
-(como con una CE-158). CSAVE \"X\" guarda X.BAS tokenizado con cabecera CE-158; \
-CSAVEa \"X\" guarda X.ASC en texto; con extensi\u{f3}n .bin se guarda tokenizado sin \
-cabecera y con .txt en texto. CLOAD \"X\" reconoce el formato solo (busca X.BAS, \
-X.ASC, X.TXT, X.BIN sin distinguir may\u{fa}sculas); CLOAD? \"X\" compara. CLOAD y \
-MERGE solo en modo directo; CHAIN \"X\"[,l\u{ed}nea] dentro de un programa. \
-Vac\u{ed}o = desactivado (ERROR 27).";
+Folder of the files of CLOAD, CSAVE, MERGE and CHAIN typed on the PC-1500 \
+(as with a CE-158). CSAVE \"X\" saves X.BAS tokenized with a CE-158 header; \
+CSAVEa \"X\" saves X.ASC as text; with the extension .bin it is saved tokenized without \
+header and with .txt as text. CLOAD \"X\" recognizes the format by itself (it looks for X.BAS, \
+X.ASC, X.TXT, X.BIN ignoring case); CLOAD? \"X\" compares. CLOAD and \
+MERGE only in direct mode; CHAIN \"X\"[,line] inside a program. \
+Empty = disabled (ERROR 27).";
 
-/// Lo que dice la carpeta del panel "CLOAD/CSAVE": vacía, desactivar
-/// (`Ok(None)`); una carpeta que existe, usarla; otra cosa, un error que
-/// mostrar sin cambiar nada.
+/// What the folder of the "CLOAD/CSAVE" panel says: empty, disable (`Ok(None)`); a folder that
+/// exists, use it; anything else, an error to show without changing anything.
 fn parse_host_dir(input: &str) -> Result<Option<PathBuf>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -982,20 +938,18 @@ fn parse_host_dir(input: &str) -> Result<Option<PathBuf>, String> {
     if dir.is_dir() {
         Ok(Some(dir))
     } else {
-        Err(format!("No es una carpeta: {}", dir.display()))
+        Err(format!("Not a folder: {}", dir.display()))
     }
 }
 
-/// El archivo de cinta del campo "Cinta" (vacío = sin cinta). No tiene
-/// por qué existir todavía: `CSAVE` lo crea.
+/// The tape file of the "Tape" field (empty = no tape). It need not exist yet: `CSAVE` creates it.
 fn parse_tape(input: &str) -> Option<PathBuf> {
     let trimmed = input.trim();
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
 }
 
-/// La línea de estado de un evento de `CLOAD`/`CSAVE` (su texto, de
-/// `HostEvent`): rojo si la PC-1500 dio `ERROR`, naranja si cargó con
-/// avisos, verde si no.
+/// The status line of an event of `CLOAD`/`CSAVE` (its text, from `HostEvent`): red if the PC-1500
+/// gave an `ERROR`, orange if it loaded with warnings, green otherwise.
 fn host_event_status(event: &HostEvent) -> BasicStatus {
     let text = event.to_string();
     match event {
@@ -1005,20 +959,20 @@ fn host_event_status(event: &HostEvent) -> BasicStatus {
     }
 }
 
-/// Notas de la ventana de ayuda del teclado.
+/// Notes of the keyboard's help window.
 const KEY_HELP_NOTES: &str = "\
-\u{b7} SHIFT y DEF son prefijos, como en la m\u{e1}quina real: se pulsan y se sueltan \
-(F11 / F7) y afectan a la tecla siguiente. El Shift del PC solo elige qu\u{e9} car\u{e1}cter \
-se teclea: \"(\" o \"?\" salen solos, con el SHIFT de la PC-1500 que haga falta.\n\
-\u{b7} Las letras salen en may\u{fa}scula. Min\u{fa}sculas: SML (F8), SHIFT (F11) + letra, o la \
-casilla \"Distinguir may\u{fa}sculas/min\u{fa}sculas\".\n\
-\u{b7} Ctrl+V teclea el portapapeles (despacio: la ROM necesita unos 8 frames emulados, \
-~92 ms a 1x, por tecla); \"Cancelar tecleo\" o ON/BRK lo paran.\n\
-\u{b7} Hasta 1x una tecla mantenida se mantiene en la PC-1500 (las flechas se repiten solas); \
-por encima de 1x cada pulsaci\u{f3}n (y cada repetici\u{f3}n del PC) es un toque corto.\n\
-\u{b7} Mientras un campo de texto tiene el foco, el teclado es para ese campo.";
+\u{b7} SHIFT and DEF are prefixes, as on the real machine: they are pressed and released \
+(F11 / F7) and affect the next key. The PC's Shift only chooses which character \
+is typed: \"(\" or \"?\" come out by themselves, with whatever PC-1500 SHIFT is needed.\n\
+\u{b7} Letters come out in uppercase. Lowercase: SML (F8), SHIFT (F11) + letter, or the \
+\"Match upper/lower case\" checkbox.\n\
+\u{b7} Ctrl+V types the clipboard (slowly: the ROM needs some 8 emulated frames, \
+~92 ms at 1x, per key); \"Cancel typing\" or ON/BRK stop it.\n\
+\u{b7} Up to 1x a key held is held on the PC-1500 (the arrows repeat by themselves); \
+above 1x each key press (and each repeat of the PC) is a short tap.\n\
+\u{b7} While a text field has the focus, the keyboard is for that field.";
 
-/// `true` si `key` es un prefijo enganchado ahora mismo (bits de $764E).
+/// `true` if `key` is a prefix latched right now (bits of $764E).
 const fn latched(key: Pc1500Key, symbols: u8) -> bool {
     let bit = match key {
         Pc1500Key::Shift => SYMBOL_SHIFT,
@@ -1029,34 +983,34 @@ const fn latched(key: Pc1500Key, symbols: u8) -> bool {
     symbols & bit != 0
 }
 
-/// Texto de un botón de velocidad: `0.1`, `0.25`, `1`, `50`...
+/// Text of a speed button: `0.1`, `0.25`, `1`, `50`...
 fn format_preset(preset: f64) -> String {
     let text = format!("{preset:.2}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
-/// Lo que muestra la interfaz sobre la velocidad efectiva.
+/// What the GUI shows about the effective speed.
 #[derive(Debug, PartialEq, Eq)]
 struct SpeedStatus {
-    /// Siempre visible: velocidad medida, o por qué no la hay.
+    /// Always visible: speed measured, or why there is none.
     measured: String,
-    /// Aviso en naranja, si lo hay.
+    /// Warning in orange, if any.
     warning: Option<&'static str>,
 }
 
-/// Ver `SpeedStatus`. En pausa o antes de la primera medida no hay
-/// velocidad que mostrar; en modo Máx no se avisa de que limita el host,
-/// porque eso es justo lo que se ha pedido.
+/// See `SpeedStatus`. While paused or before the first measurement there is no speed to show; in
+/// Max mode there is no warning that the host limits it, because that is exactly what was asked
+/// for.
 fn speed_status_text(
     paused: bool,
     max_speed: bool,
     measurement: Option<pacing::Measurement>,
 ) -> SpeedStatus {
     if paused {
-        return SpeedStatus { measured: "Real: en pausa".to_owned(), warning: None };
+        return SpeedStatus { measured: "Real: paused".to_owned(), warning: None };
     }
     let Some(m) = measurement else {
-        return SpeedStatus { measured: "Real: midiendo\u{2026}".to_owned(), warning: None };
+        return SpeedStatus { measured: "Real: measuring\u{2026}".to_owned(), warning: None };
     };
     let measured = format!(
         "Real: x{} \u{b7} {:.2} MHz",
@@ -1064,9 +1018,9 @@ fn speed_status_text(
         m.emulated_mhz
     );
     let warning = if max_speed {
-        Some("turbo: todo lo que da el host")
+        Some("turbo: as much as the host gives")
     } else if m.host_limited {
-        Some("limitado por el host")
+        Some("limited by the host")
     } else {
         None
     };
@@ -1088,23 +1042,23 @@ mod tests {
 
     #[test]
     fn host_dir_field() {
-        assert_eq!(parse_host_dir("  "), Ok(None), "vac\u{ed}o desactiva");
+        assert_eq!(parse_host_dir("  "), Ok(None), "empty disables");
         let dir = std::env::temp_dir();
-        assert_eq!(parse_host_dir(&format!(" {} ", dir.display())), Ok(Some(dir.clone())), "carpeta");
-        let missing = dir.join("ceres-no-existe-\u{f1}");
-        assert!(parse_host_dir(&missing.display().to_string()).is_err(), "no existe");
-        assert_eq!(parse_tape(" "), None, "sin cinta");
-        assert_eq!(parse_tape(" a/b.bas "), Some(PathBuf::from("a/b.bas")), "cinta");
+        assert_eq!(parse_host_dir(&format!(" {} ", dir.display())), Ok(Some(dir.clone())), "folder");
+        let missing = dir.join("ceres-does-not-exist-\u{f1}");
+        assert!(parse_host_dir(&missing.display().to_string()).is_err(), "it does not exist");
+        assert_eq!(parse_tape(" "), None, "no tape");
+        assert_eq!(parse_tape(" a/b.bas "), Some(PathBuf::from("a/b.bas")), "tape");
     }
 
     #[test]
     fn host_event_colors() {
-        let error = HostEvent::Error { command: ceres_core::HostCommand::Cload, code: 61, message: "no existe".to_owned() };
+        let error = HostEvent::Error { command: ceres_core::HostCommand::Cload, code: 61, message: "it does not exist".to_owned() };
         assert_eq!(host_event_status(&error).kind, StatusKind::Error, "error");
         let verified = HostEvent::Verified { path: PathBuf::from("x"), bytes: 1 };
         let status = host_event_status(&verified);
-        assert_eq!(status.kind, StatusKind::Ok, "verificado");
-        assert_eq!(status.text, "CLOAD? x: coincide (1 bytes)", "texto del evento");
+        assert_eq!(status.kind, StatusKind::Ok, "verified");
+        assert_eq!(status.text, "CLOAD? x: coincide (1 bytes)", "text of the event");
     }
 
     #[test]
@@ -1120,7 +1074,7 @@ mod tests {
         let limited = pacing::Measurement { multiplier: 152.4, emulated_mhz: 198.12, host_limited: true };
 
         let paused = speed_status_text(true, false, Some(normal));
-        assert_eq!(paused.measured, "Real: en pausa");
+        assert_eq!(paused.measured, "Real: paused");
         assert_eq!(paused.warning, None);
         assert_eq!(speed_status_text(false, false, None).warning, None);
 
@@ -1130,9 +1084,9 @@ mod tests {
 
         let slow_host = speed_status_text(false, false, Some(limited));
         assert_eq!(slow_host.measured, "Real: x152 \u{b7} 198.12 MHz");
-        assert_eq!(slow_host.warning, Some("limitado por el host"));
+        assert_eq!(slow_host.warning, Some("limited by the host"));
 
         let turbo = speed_status_text(false, true, Some(limited));
-        assert_eq!(turbo.warning, Some("turbo: todo lo que da el host"));
+        assert_eq!(turbo.warning, Some("turbo: as much as the host gives"));
     }
 }

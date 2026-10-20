@@ -1,28 +1,23 @@
-//! Del teclado del PC (eventos de egui) a teclas de la PC-1500.
+//! From the PC's keyboard (egui's events) to PC-1500 keys.
 //!
-//! Todo lo de aquí es lógica pura, sin interfaz, para poder probarla con
-//! listas de eventos sintéticas: [`HostKeymap::translate`] convierte
-//! eventos en [`HostAction`], y [`apply`] se las pasa al alimentador de
-//! teclas del emulador (`Pc1500::host_key_down`...), que es quien pulsa y
-//! suelta en tiempo EMULADO. La interfaz (`pc1500_app.rs`) solo roba los
-//! eventos de teclado antes de que los vea egui ([`capture_events`],
-//! desde `raw_input_hook`) y pinta.
+//! Everything here is pure logic, without GUI, so that it can be tested with lists of synthetic
+//! events: [`HostKeymap::translate`] turns events into [`HostAction`]s, and [`apply`] passes them
+//! to the emulator's key feeder (`Pc1500::host_key_down`...), which is what presses and releases in
+//! EMULATED time. The GUI (`pc1500_app.rs`) only takes the keyboard events before egui sees them
+//! ([`capture_events`], from `raw_input_hook`) and paints.
 //!
-//! # Caracteres por texto, el resto por tabla
-//! Los caracteres imprimibles se toman del `Event::Text` que manda
-//! egui-winit justo detrás del `Event::Key` de la misma pulsación, no de
-//! la tecla: así da igual la distribución del teclado del host (en un
-//! teclado español `(` es Shift+8, y egui no tiene ni siquiera variante
-//! de `egui::Key` para `(`). Lo que no es texto (flechas, F1...,
-//! Esc...) sale de la tabla fija [`SPECIAL`]. El `SHIFT` del host no es
-//! el `SHIFT` de la PC-1500 (que es un prefijo, ver
-//! `ceres_core::KeyStroke`): solo decide qué carácter produce el host, y
-//! las combinaciones Shift+tecla especial de [`SPECIAL`]. El `SHIFT` de
-//! la PC-1500 es F11 o la tecla de la pantalla.
+//! # Characters by text, the rest by table
+//! Printable characters are taken from the `Event::Text` that egui-winit sends right after the
+//! `Event::Key` of the same key press, not from the key: so the host keyboard's layout makes no
+//! difference (on a Spanish keyboard `(` is Shift+8, and egui does not even have an `egui::Key`
+//! variant for `(`). What is not text (arrows, F1..., Esc...) comes from the fixed table
+//! [`SPECIAL`]. The host's `SHIFT` is not the PC-1500's `SHIFT` (which is a prefix, see
+//! `ceres_core::KeyStroke`): it only decides which character the host produces, and the
+//! Shift+special key combinations of [`SPECIAL`]. The PC-1500's `SHIFT` is F11 or the key on
+//! screen.
 //!
-//! La ayuda de la interfaz (ventana "Teclado") y las pistas de cada
-//! tecla ([`hint`]) se generan de las mismas tablas, así que no pueden
-//! desincronizarse del comportamiento real.
+//! The GUI's help (the "Keyboard" window) and the hints of each key ([`hint`]) are generated from
+//! the same tables, so they cannot get out of step with the real behaviour.
 
 use std::collections::HashMap;
 
@@ -31,47 +26,45 @@ use ceres_core::{
 };
 use eframe::egui::{self, Event};
 
-/// Identificador de "tecla del host" para el ratón sobre las teclas de la
-/// pantalla. Fuera del rango de `egui::Key as u32`.
+/// Identifier of "host key" for the mouse on the keys on screen. Outside the range of
+/// `egui::Key as u32`.
 pub const MOUSE_ID: HostKeyId = 0xFFFF_0000;
 
-/// Identificador para el `ON/BRK` de Ctrl+C (`Event::Copy`, que no trae
-/// `Event::Key`).
+/// Identifier for the `ON/BRK` of Ctrl+C (`Event::Copy`, which brings no `Event::Key`).
 pub const COPY_ID: HostKeyId = 0xFFFF_0001;
 
-/// Modificadores con los que se busca una fila de [`SPECIAL`].
+/// Modifiers with which a row of [`SPECIAL`] is looked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mods {
-    /// Sin Ctrl (con o sin Shift si no hay fila `Shift` propia).
+    /// Without Ctrl (with or without Shift if there is no `Shift` row of its own).
     None,
-    /// Shift sin Ctrl.
+    /// Shift without Ctrl.
     Shift,
-    /// Ctrl (o Cmd).
+    /// Ctrl (or Cmd).
     Ctrl,
 }
 
-/// Lo que hace una tecla especial del host.
+/// What a special key of the host does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpecialAction {
-    /// Una tecla de la PC-1500 que se mantiene mientras se mantenga en el
-    /// host (ver `Pc1500::host_key_down`).
+    /// A PC-1500 key that is held as long as it is held on the host (see `Pc1500::host_key_down`).
     Hold(KeyStroke),
-    /// Pulsaciones sueltas de duración fija. Con `repeat`, la
-    /// autorrepetición del sistema operativo las repite (Retroceso).
+    /// One-off key presses of fixed length. With `repeat`, the operating system's key repeat
+    /// repeats them (Backspace).
     Tap { strokes: &'static [KeyStroke], repeat: bool },
     /// `ON/BRK`.
     Brk,
 }
 
-/// Una fila de la tabla de teclas especiales.
+/// A row of the table of special keys.
 #[derive(Clone, Copy, Debug)]
 pub struct Special {
     pub key: egui::Key,
     pub mods: Mods,
-    /// Cómo se llama la tecla del host en la ayuda.
+    /// What the host's key is called in the help.
     pub host_label: &'static str,
     pub action: SpecialAction,
-    /// Explicación para la ayuda (puede ir vacía).
+    /// Explanation for the help (it can be empty).
     pub note: &'static str,
 }
 
@@ -87,48 +80,47 @@ const BACKSPACE: &[KeyStroke] = &[KeyStroke::plain(Key::Left), KeyStroke::shifte
 const OFF: &[KeyStroke] = &[KeyStroke::plain(Key::Off)];
 const SHIFT_PREFIX: &[KeyStroke] = &[KeyStroke::plain(Key::Shift)];
 
-/// Las teclas del host que no son texto (o lo son pero con otro
-/// significado), en el orden en que salen en la ayuda. La tabla
-/// definitiva decidida con el usuario: Esc = `ON/BRK`, `OFF` solo con
-/// Ctrl+F12, Inicio = `CL`, Retroceso = borrar de verdad.
+/// The host's keys that are not text (or are, but with another meaning), in the order they appear
+/// in the help. The final table, decided with the user: Esc = `ON/BRK`, `OFF` only with Ctrl+F12,
+/// Home = `CL`, Backspace = really delete.
 pub const SPECIAL: &[Special] = {
     use KeyStroke as S;
     use egui::Key as E;
     use Key as P;
     use Mods::{Ctrl, None as No, Shift};
     &[
-        brk(E::Escape, No, "Esc", "BREAK; enciende la m\u{e1}quina apagada"),
-        brk(E::F12, No, "F12", "igual que Esc"),
-        brk(E::End, No, "Fin", "igual que Esc"),
+        brk(E::Escape, No, "Esc", "BREAK; switches the machine on when it is off"),
+        brk(E::F12, No, "F12", "the same as Esc"),
+        brk(E::End, No, "End", "the same as Esc"),
         Special {
             key: E::F12,
             mods: Ctrl,
             host_label: "Ctrl+F12",
             action: SpecialAction::Tap { strokes: OFF, repeat: false },
-            note: "apaga (solo con Ctrl, para no pulsarlo sin querer)",
+            note: "switches off (only with Ctrl, so as not to press it by mistake)",
         },
-        hold(E::Home, No, "Inicio", S::plain(P::Cl), "borra la l\u{ed}nea / el error"),
-        hold(E::Home, Shift, "Shift+Inicio", S::shifted(P::Cl), "CA: borra todo"),
-        hold(E::Enter, No, "Intro", S::plain(P::Enter), ""),
+        hold(E::Home, No, "Home", S::plain(P::Cl), "clears the line / the error"),
+        hold(E::Home, Shift, "Shift+Home", S::shifted(P::Cl), "CA: clears everything"),
+        hold(E::Enter, No, "Enter", S::plain(P::Enter), ""),
         Special {
             key: E::Backspace,
             mods: No,
-            host_label: "Retroceso",
+            host_label: "Backspace",
             action: SpecialAction::Tap { strokes: BACKSPACE, repeat: true },
-            note: "borra a la izquierda (\u{2190} y luego DEL)",
+            note: "deletes to the left (\u{2190} and then DEL)",
         },
-        hold(E::Delete, No, "Supr", S::shifted(P::Left), "DEL: borra bajo el cursor (sin repetici\u{f3}n, como la real)"),
-        hold(E::Insert, No, "Insert", S::shifted(P::Right), "INS: abre un hueco"),
-        hold(E::ArrowLeft, No, "\u{2190}", S::plain(P::Left), "con autorrepetici\u{f3}n de la ROM"),
+        hold(E::Delete, No, "Delete", S::shifted(P::Left), "DEL: deletes under the cursor (no key repeat, as the real one)"),
+        hold(E::Insert, No, "Insert", S::shifted(P::Right), "INS: opens a gap"),
+        hold(E::ArrowLeft, No, "\u{2190}", S::plain(P::Left), "with the ROM's key repeat"),
         hold(E::ArrowRight, No, "\u{2192}", S::plain(P::Right), ""),
         hold(E::ArrowUp, No, "\u{2191}", S::plain(P::Up), ""),
         hold(E::ArrowDown, No, "\u{2193}", S::plain(P::Down), ""),
         hold(E::ArrowLeft, Shift, "Shift+\u{2190}", S::shifted(P::Left), "DEL"),
         hold(E::ArrowRight, Shift, "Shift+\u{2192}", S::shifted(P::Right), "INS"),
-        hold(E::ArrowUp, Shift, "Shift+\u{2191}", S::shifted(P::Up), "[ (en el LCD se ve \u{221a})"),
-        hold(E::ArrowDown, Shift, "Shift+\u{2193}", S::shifted(P::Down), "] (en el LCD se ve \u{3c0})"),
-        hold(E::PageUp, No, "Re P\u{e1}g", S::plain(P::Up), ""),
-        hold(E::PageDown, No, "Av P\u{e1}g", S::plain(P::Down), ""),
+        hold(E::ArrowUp, Shift, "Shift+\u{2191}", S::shifted(P::Up), "[ (the LCD shows \u{221a})"),
+        hold(E::ArrowDown, Shift, "Shift+\u{2193}", S::shifted(P::Down), "] (the LCD shows \u{3c0})"),
+        hold(E::PageUp, No, "Page Up", S::plain(P::Up), ""),
+        hold(E::PageDown, No, "Page Down", S::plain(P::Down), ""),
         hold(E::Tab, No, "Tab", S::plain(P::Mode), "MODE: RUN / PRO"),
         hold(E::Tab, Shift, "Shift+Tab", S::shifted(P::Mode), "RESERVE"),
         hold(E::F1, No, "F1", S::plain(P::F1), ""),
@@ -143,30 +135,29 @@ pub const SPECIAL: &[Special] = {
         hold(E::F4, Shift, "Shift+F4", S::shifted(P::F4), "$"),
         hold(E::F5, Shift, "Shift+F5", S::shifted(P::F5), "%"),
         hold(E::F6, Shift, "Shift+F6", S::shifted(P::F6), "&"),
-        hold(E::F7, No, "F7", S::plain(P::Control), "DEF (prefijo)"),
-        hold(E::F8, No, "F8", S::plain(P::Sml), "SML: min\u{fa}sculas s\u{ed}/no"),
-        hold(E::F9, No, "F9", S::plain(P::Rsv), "RSV: cambia de capa de teclas reservadas"),
+        hold(E::F7, No, "F7", S::plain(P::Control), "DEF (prefix)"),
+        hold(E::F8, No, "F8", S::plain(P::Sml), "SML: lowercase on/off"),
+        hold(E::F9, No, "F9", S::plain(P::Rsv), "RSV: changes the layer of reserved keys"),
         hold(E::F10, No, "F10", S::plain(P::Rcl), ""),
         Special {
             key: E::F11,
             mods: No,
             host_label: "F11",
             action: SpecialAction::Tap { strokes: SHIFT_PREFIX, repeat: false },
-            note: "SHIFT de la PC-1500 (prefijo: afecta a la siguiente tecla)",
+            note: "SHIFT of the PC-1500 (prefix: it affects the next key)",
         },
     ]
 };
 
-/// Filas extra de la ayuda que no son teclas de [`SPECIAL`] (llegan como
-/// otros eventos de egui): `(tecla del host, efecto)`.
+/// Extra rows of the help that are not keys of [`SPECIAL`] (they come as other egui events):
+/// `(host key, effect)`.
 pub const EXTRA_HELP: &[(&str, &str)] = &[
-    ("Ctrl+C", "ON/BRK (BREAK), como en un terminal"),
-    ("Ctrl+V", "teclea el texto del portapapeles (exacto, may\u{fa}sculas/min\u{fa}sculas incluidas)"),
+    ("Ctrl+C", "ON/BRK (BREAK), as in a terminal"),
+    ("Ctrl+V", "types the clipboard's text (exactly, upper and lower case included)"),
 ];
 
-/// Busca la fila de [`SPECIAL`] de una tecla con sus modificadores. Con
-/// Ctrl solo valen las filas `Ctrl`; con Shift, la fila `Shift` si la
-/// hay y si no la normal (Shift+F8 = F8).
+/// Looks for the row of [`SPECIAL`] of a key with its modifiers. With Ctrl only the `Ctrl` rows
+/// count; with Shift, the `Shift` row if there is one and otherwise the normal one (Shift+F8 = F8).
 #[must_use]
 pub fn find_special(key: egui::Key, modifiers: egui::Modifiers) -> Option<&'static Special> {
     let find = |mods| SPECIAL.iter().find(|s| s.key == key && s.mods == mods);
@@ -179,44 +170,40 @@ pub fn find_special(key: egui::Key, modifiers: egui::Modifiers) -> Option<&'stat
     }
 }
 
-/// Ctrl (o Cmd en macOS): los atajos que se dejan a egui (zoom...).
+/// Ctrl (or Cmd on macOS): the shortcuts left to egui (zoom...).
 const fn is_command(modifiers: egui::Modifiers) -> bool {
     modifiers.ctrl || modifiers.command || modifiers.mac_cmd
 }
 
-/// Lo que hay que hacer en el emulador por un evento del host (ver
-/// [`apply`]).
+/// What has to be done in the emulator because of a host event (see [`apply`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostAction {
-    /// Tecla física pulsada: mantener `stroke` hasta su [`HostAction::Up`].
+    /// Physical key pressed: hold `stroke` until its [`HostAction::Up`].
     Down { id: HostKeyId, stroke: KeyStroke, policy: ShiftPolicy },
-    /// Autorrepetición del sistema operativo de una tecla mantenida.
+    /// The operating system's key repeat of a held key.
     Repeat { id: HostKeyId, stroke: KeyStroke, policy: ShiftPolicy },
-    /// Tecla física soltada.
+    /// Physical key released.
     Up { id: HostKeyId },
-    /// Pulsaciones sueltas de duración fija.
+    /// One-off key presses of fixed length.
     Tap(Vec<KeyStroke>),
-    /// Autorrepetición del sistema operativo de una tecla que se traduce
-    /// a toques (Retroceso). Es distinta de [`HostAction::Tap`] porque
-    /// [`apply`] solo la encola si el alimentador no tiene nada
-    /// pendiente: un retroceso son dos toques (`←` y `SHIFT` + `←`, unos
-    /// 24 frames emulados, ~276 ms a 1x) y el SO repite cada ~33 ms, así
-    /// que encolándolas todas la cola crecería sin límite y la máquina
-    /// seguiría borrando segundos después de soltar la tecla.
+    /// The operating system's key repeat of a key that translates into taps (Backspace). It is
+    /// different from [`HostAction::Tap`] because [`apply`] only queues it if the feeder has
+    /// nothing pending: a backspace is two taps (`←` and `SHIFT` + `←`, some 24 emulated frames,
+    /// ~276 ms at 1x) and the OS repeats every ~33 ms, so queuing them all the queue would grow
+    /// without limit and the machine would go on deleting seconds after the key was released.
     TapRepeat(Vec<KeyStroke>),
-    /// Texto a teclear (pegado, o caracteres que llegan sin tecla).
+    /// Text to type (pasted, or characters that come without a key).
     TypeText(String),
-    /// `ON/BRK` pulsada (`down`) o soltada.
+    /// `ON/BRK` pressed (`down`) or released.
     Brk { id: HostKeyId, down: bool },
-    /// Soltar todo (la ventana perdió el foco).
+    /// Release everything (the window lost focus).
     ReleaseAll,
-    /// Un carácter que no tiene tecla en la PC-1500.
+    /// A character that has no key on the PC-1500.
     Ignored(char),
 }
 
-/// Qué se recuerda de una tecla del host mientras está pulsada: para
-/// soltarla aunque al soltarla cambien los modificadores y para saber
-/// qué hacer con su autorrepetición.
+/// What is remembered of a host key while it is down: to release it even if the modifiers change
+/// when releasing it, and to know what to do with its key repeat.
 #[derive(Clone, Copy, Debug)]
 enum Held {
     Live(KeyStroke, ShiftPolicy),
@@ -225,36 +212,32 @@ enum Held {
     Nothing,
 }
 
-/// El traductor de eventos (con el estado de qué teclas físicas siguen
-/// pulsadas, que hay que llevar a mano porque los eventos se roban antes
-/// de que egui los procese, ver [`capture_events`]).
+/// The event translator (with the state of which physical keys are still down, which has to be kept
+/// by hand because the events are taken before egui processes them, see [`capture_events`]).
 #[derive(Debug, Default)]
 pub struct HostKeymap {
     down: HashMap<HostKeyId, Held>,
-    /// Casilla "Distinguir mayúsculas/minúsculas": las letras salen con
-    /// la caja del host (minúscula = `SHIFT` + letra, compensando `SML`).
-    /// Apagada (lo predeterminado), cada letra es la tecla de la PC-1500
-    /// sin más, que es mayúscula salvo con `SML`: lo que quieren las
-    /// palabras clave de BASIC.
+    /// The "Match upper/lower case" checkbox: letters come out with the host's case (lowercase =
+    /// `SHIFT` + letter, making up for `SML`). Off (the default), each letter is the PC-1500 key
+    /// and nothing more, which is uppercase except with `SML`: what BASIC's keywords want.
     exact_case: bool,
 }
 
 impl HostKeymap {
-    /// La casilla "Distinguir mayúsculas/minúsculas" (ver `exact_case`).
+    /// The "Match upper/lower case" checkbox (see `exact_case`).
     pub const fn exact_case_mut(&mut self) -> &mut bool {
         &mut self.exact_case
     }
 
-    /// Traduce los eventos de un repintado. Ver el comentario del módulo.
+    /// Translates the events of a repaint. See the module's comment.
     ///
-    /// - `Event::Key` pulsado seguido de `Event::Text`: es la MISMA
-    ///   pulsación (egui-winit los manda así); el texto se toma de ahí y
-    ///   se consume, para no teclearlo dos veces.
-    /// - El `id` de una tecla es su tecla física (`physical_key`, o la
-    ///   lógica si no hay): la suelta se empareja por él.
-    /// - Una pulsación de un `id` que ya está pulsado es autorrepetición
-    ///   del sistema operativo (egui-winit siempre manda `repeat: false`
-    ///   y es egui quien lo rellena, pero los eventos se le roban antes).
+    /// - `Event::Key` pressed followed by `Event::Text`: it is the SAME key press (egui-winit sends
+    ///   them so); the text is taken from there and consumed, so as not to type it twice.
+    /// - The `id` of a key is its physical key (`physical_key`, or the logical one if there is
+    ///   none): the release is paired by it.
+    /// - A press of an `id` that is already down is the operating system's key repeat (egui-winit
+    ///   always sends `repeat: false` and it is egui that fills it in, but the events are taken
+    ///   from it before).
     #[must_use]
     pub fn translate(&mut self, events: &[Event]) -> Vec<HostAction> {
         let mut out = Vec::new();
@@ -275,8 +258,7 @@ impl HostKeymap {
                     } else if let Some(&held) = self.down.get(&id) {
                         repeat_action(id, held, &mut out);
                     } else if *repeat {
-                        // Repetición de una tecla pulsada antes de que
-                        // empezáramos a capturar: no es nuestra.
+                        // Repeat of a key pressed before we started capturing: it is not ours.
                     } else {
                         let held = self.press(id, *key, *modifiers, text, &mut out);
                         self.down.insert(id, held);
@@ -336,8 +318,7 @@ impl HostKeymap {
             return Held::Nothing;
         }
         let Some(text) = text else {
-            // Shift solo, una tecla muerta (el carácter llega con la
-            // siguiente pulsación)...
+            // Shift alone, a dead key (the character comes with the next key press)...
             return Held::Nothing;
         };
         let mut chars = text.chars();
@@ -359,7 +340,7 @@ impl HostKeymap {
         }
     }
 
-    /// La pulsación de un carácter tecleado en vivo (ver `exact_case`).
+    /// The key press of a character typed live (see `exact_case`).
     fn char_stroke(&self, c: char) -> Option<(KeyStroke, ShiftPolicy)> {
         if c.is_ascii_alphabetic() && !self.exact_case {
             let stroke = key_for_char(c.to_ascii_uppercase())?;
@@ -370,7 +351,7 @@ impl HostKeymap {
     }
 }
 
-/// Ver [`HostKeymap::translate`].
+/// See [`HostKeymap::translate`].
 fn host_key_id(key: egui::Key, physical_key: Option<egui::Key>) -> HostKeyId {
     physical_key.unwrap_or(key) as HostKeyId
 }
@@ -383,32 +364,28 @@ fn repeat_action(id: HostKeyId, held: Held, out: &mut Vec<HostAction>) {
     }
 }
 
-/// Cómo se mantienen las teclas según la velocidad (decisión del
-/// usuario).
+/// How the keys are held depending on the speed (the user's decision).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HoldPolicy {
-    /// Hasta 1x: una tecla del host se mantiene en la PC-1500 mientras
-    /// se mantenga físicamente (con un mínimo en tiempo emulado); la
-    /// autorrepetición la hace la ROM, como en la máquina real.
+    /// Up to 1x: a host key is held on the PC-1500 as long as it is physically held (with a minimum
+    /// in emulated time); the key repeat is done by the ROM, as on the real machine.
     Hold,
-    /// Por encima de 1x (y en modo Máx): cada pulsación del host,
-    /// autorrepeticiones del sistema operativo incluidas, es una
-    /// pulsación de duración fija en tiempo emulado y las sueltas se
-    /// ignoran. Si no, a 50x una flecha mantenida un instante se
-    /// autorrepetiría decenas de veces.
+    /// Above 1x (and in Max mode): each key press of the host, the operating system's key repeats
+    /// included, is a key press of fixed length in emulated time, and the releases are ignored.
+    /// Otherwise, at 50x an arrow held for an instant would repeat itself dozens of times.
     Tap,
 }
 
-/// Ver [`HoldPolicy`].
+/// See [`HoldPolicy`].
 #[must_use]
 pub fn hold_policy(max_speed: bool, multiplier: f64) -> HoldPolicy {
-    // Margen para que el 1.00x del slider logarítmico (que puede quedar
-    // en 1.0000001) siga siendo "tiempo real".
+    // Margin so that the 1.00x of the logarithmic slider (which can end up at 1.0000001) is still
+    // "real time".
     if max_speed || multiplier > 1.0 + 1e-6 { HoldPolicy::Tap } else { HoldPolicy::Hold }
 }
 
-/// Aplica una acción al emulador. Devuelve un mensaje para la línea de
-/// estado si hay algo que contar (caracteres sin tecla).
+/// Applies an action to the emulator. It returns a message for the status line if there is
+/// something to tell (characters with no key).
 pub fn apply(pc: &mut Pc1500, action: &HostAction, policy: HoldPolicy) -> Option<String> {
     let tap = policy == HoldPolicy::Tap;
     match *action {
@@ -420,12 +397,11 @@ pub fn apply(pc: &mut Pc1500, action: &HostAction, policy: HoldPolicy) -> Option
             }
         }
         HostAction::Repeat { stroke, policy: shift, .. } => {
-            // Hasta 1x la autorrepetición la hace la propia ROM. Por
-            // encima, cada repetición del SO es un toque, pero solo si el
-            // alimentador ya no tiene nada pendiente: cada toque dura 8
-            // frames emulados (~46 ms de host a 2x) y el SO repite cada
-            // ~33 ms, así que sin esto se acumularía cola y la tecla
-            // seguiría "repitiéndose" un rato después de soltarla.
+            // Up to 1x the key repeat is done by the ROM itself. Above it, each repeat of the OS is
+            // a tap, but only if the feeder has nothing pending any more: each tap lasts 8 emulated
+            // frames (~46 ms of host time at 2x) and the OS repeats every ~33 ms, so without this a
+            // queue would build up and the key would go on "repeating" for a while after it was
+            // released.
             if tap && pc.pending_keystrokes() == 0 {
                 pc.host_tap_with(&[stroke], shift);
             }
@@ -437,8 +413,8 @@ pub fn apply(pc: &mut Pc1500, action: &HostAction, policy: HoldPolicy) -> Option
         }
         HostAction::Tap(ref strokes) => pc.host_tap(strokes),
         HostAction::TapRepeat(ref strokes) => {
-            // Con cualquier política: ver [`HostAction::TapRepeat`]. Al
-            // soltar la tecla queda como mucho el retroceso en curso.
+            // With any policy: see [`HostAction::TapRepeat`]. When the key is released, at most the
+            // backspace in progress remains.
             if pc.pending_keystrokes() == 0 {
                 pc.host_tap(strokes);
             }
@@ -457,14 +433,14 @@ pub fn apply(pc: &mut Pc1500, action: &HostAction, policy: HoldPolicy) -> Option
     None
 }
 
-/// Mensaje para caracteres que no se han podido teclear.
+/// Message for characters that could not be typed.
 fn skipped_message(skipped: &[char]) -> Option<String> {
     match skipped {
         [] => None,
-        [c] => Some(format!("car\u{e1}cter sin tecla en la PC-1500: {}", show_char(*c))),
+        [c] => Some(format!("character with no key on the PC-1500: {}", show_char(*c))),
         many => {
             let list: Vec<String> = many.iter().map(|&c| show_char(c)).collect();
-            Some(format!("caracteres sin tecla en la PC-1500 (omitidos): {}", list.join(" ")))
+            Some(format!("characters with no key on the PC-1500 (left out): {}", list.join(" ")))
         }
     }
 }
@@ -473,15 +449,14 @@ fn show_char(c: char) -> String {
     if c.is_control() { c.escape_default().collect() } else { c.to_string() }
 }
 
-/// Saca de `events` los eventos de teclado que son para el emulador y los
-/// devuelve (se llama desde `raw_input_hook`, antes de que egui los
-/// procese, solo si se está capturando el teclado).
+/// Takes out of `events` the keyboard events that are for the emulator and returns them (it is
+/// called from `raw_input_hook`, before egui processes them, only if the keyboard is being
+/// captured).
 ///
-/// Así egui no ve Tab ni las flechas (que moverían el foco entre
-/// controles) ni Espacio/Intro (que pulsarían el botón con el foco).
-/// Se quedan en egui los atajos con Ctrl/Cmd salvo Ctrl+F12 (zoom...).
-/// Las sueltas de tecla y la pérdida de foco van a los DOS sitios: así
-/// ninguno de los dos se queda con una tecla pegada.
+/// So egui does not see Tab nor the arrows (which would move the focus between controls) nor
+/// Space/Enter (which would click the button with the focus). The shortcuts with Ctrl/Cmd stay with
+/// egui except Ctrl+F12 (zoom...). Key releases and the loss of focus go to BOTH places: so neither
+/// of the two keeps a key stuck.
 #[must_use]
 pub fn capture_events(events: &mut Vec<Event>) -> Vec<Event> {
     let mut stolen = Vec::new();
@@ -507,21 +482,19 @@ pub fn capture_events(events: &mut Vec<Event>) -> Vec<Event> {
     stolen
 }
 
-/// Registro de los campos de texto de la interfaz: mientras uno tiene el
-/// foco no se captura el teclado (lo que se teclee es para el campo, no
-/// para la PC-1500).
+/// Register of the GUI's text fields: while one has the focus the keyboard is not captured (what is
+/// typed is for the field, not for the PC-1500).
 ///
-/// TODOS los `TextEdit` de la interfaz (rutas de archivos y cualquiera
-/// que se añada) tienen que crearse con [`TextEditRegistry::add`] o
-/// registrarse con [`TextEditRegistry::register`] en cada repintado, o
-/// lo que se escriba en ellos llegará también al emulador.
+/// ALL the GUI's `TextEdit`s (file paths and any added) have to be created with
+/// [`TextEditRegistry::add`] or registered with [`TextEditRegistry::register`] at each repaint, or
+/// what is typed in them will also reach the emulator.
 #[derive(Debug, Default)]
 pub struct TextEditRegistry {
     ids: Vec<egui::Id>,
 }
 
 impl TextEditRegistry {
-    /// Al empezar cada repintado, antes de dibujar nada.
+    /// At the start of each repaint, before drawing anything.
     pub fn clear(&mut self) {
         self.ids.clear();
     }
@@ -530,22 +503,22 @@ impl TextEditRegistry {
         self.ids.push(id);
     }
 
-    /// `ui.add(edit)` y registrarlo.
+    /// `ui.add(edit)` and register it.
     pub fn add(&mut self, ui: &mut egui::Ui, edit: egui::TextEdit<'_>) -> egui::Response {
         let response = ui.add(edit);
         self.register(response.id);
         response
     }
 
-    /// `true` si, con el foco de egui en `focused`, el teclado es para la
-    /// PC-1500 (ningún campo de texto registrado lo tiene).
+    /// `true` if, with egui's focus at `focused`, the keyboard is for the PC-1500 (no registered
+    /// text field has it).
     #[must_use]
     pub fn allows_capture(&self, focused: Option<egui::Id>) -> bool {
         focused.is_none_or(|id| !self.ids.contains(&id))
     }
 }
 
-/// `"("` o `"SHIFT + ("`.
+/// `"("` or `"SHIFT + ("`.
 #[must_use]
 pub fn stroke_label(stroke: KeyStroke) -> String {
     if stroke.shift {
@@ -555,7 +528,7 @@ pub fn stroke_label(stroke: KeyStroke) -> String {
     }
 }
 
-/// La columna "PC-1500" de una fila de la ayuda.
+/// The "PC-1500" column of a row of the help.
 #[must_use]
 pub fn action_label(action: SpecialAction) -> String {
     match action {
@@ -567,23 +540,21 @@ pub fn action_label(action: SpecialAction) -> String {
     }
 }
 
-/// Cómo se llama un carácter del host en la ayuda.
+/// What a host character is called in the help.
 fn char_label(c: char) -> String {
-    if c == ' ' { "Espacio".to_owned() } else { c.to_string() }
+    if c == ' ' { "Space".to_owned() } else { c.to_string() }
 }
 
-/// La tabla de caracteres de la ayuda: cada ASCII imprimible con la
-/// secuencia de la PC-1500 que lo teclea, o `None` si no tiene tecla.
+/// The help's table of characters: each printable ASCII character with the PC-1500 sequence that
+/// types it, or `None` if it has no key.
 #[must_use]
 pub fn char_table() -> Vec<(String, Option<String>)> {
     (' '..='~').map(|c| (char_label(c), key_for_char(c).map(stroke_label))).collect()
 }
 
-/// Qué teclas del PC dan `key`, para la pista de cada tecla de la
-/// pantalla: p. ej. `"Teclado PC: F9"`, o para `(`
-/// `"Teclado PC: ( \u{b7} con SHIFT: <"`. Sale de [`SPECIAL`] y de la
-/// tabla de caracteres. `None` si ninguna (no pasa con ninguna tecla,
-/// lo comprueban los tests).
+/// Which PC keys give `key`, for the hint of each key on screen: e.g. `"PC keyboard: F9"`, or for
+/// `(` `"PC keyboard: ( \u{b7} with SHIFT: <"`. It comes from [`SPECIAL`] and from the table of
+/// characters. `None` if none (it does not happen with any key, the tests check it).
 #[must_use]
 pub fn hint(key: Key) -> Option<String> {
     let mut plain: Vec<String> = Vec::new();
@@ -619,9 +590,9 @@ pub fn hint(key: Key) -> Option<String> {
     if plain.is_empty() && shifted.is_empty() {
         return None;
     }
-    let mut text = format!("Teclado PC: {}", plain.join(" / "));
+    let mut text = format!("PC keyboard: {}", plain.join(" / "));
     if !shifted.is_empty() {
-        text.push_str(" \u{b7} con SHIFT: ");
+        text.push_str(" \u{b7} with SHIFT: ");
         text.push_str(&shifted.join(" / "));
     }
     Some(text)
@@ -648,7 +619,7 @@ mod tests {
 
     #[test]
     fn text_after_key_is_the_same_keystroke() {
-        // Teclado español: Shift+8 = '('.
+        // Spanish keyboard: Shift+8 = '('.
         let mut map = HostKeymap::default();
         let actions = map.translate(&[key(E::Num8, true, Modifiers::SHIFT), text("(")]);
         assert_eq!(
@@ -673,7 +644,7 @@ mod tests {
                 policy: ShiftPolicy::AddIfNeeded
             }]
         );
-        // AltGr+2 = '@' en Linux.
+        // AltGr+2 = '@' on Linux.
         assert_eq!(
             map.translate(&[key(E::Num2, true, Modifiers::ALT), text("@")]),
             [HostAction::Down {
@@ -700,13 +671,13 @@ mod tests {
         let down = map.translate(&[key(E::A, true, NONE), text("a")]);
         let stroke = KeyStroke::plain(Key::A);
         let policy = ShiftPolicy::AddIfNeeded;
-        assert_eq!(down, [HostAction::Down { id: id(E::A), stroke, policy }], "may\u{fa}scula por defecto");
-        // Repetición del SO (otra pulsación del mismo id, con su texto).
+        assert_eq!(down, [HostAction::Down { id: id(E::A), stroke, policy }], "uppercase by default");
+        // OS key repeat (another press of the same id, with its text).
         assert_eq!(
             map.translate(&[key(E::A, true, NONE), text("a")]),
             [HostAction::Repeat { id: id(E::A), stroke, policy }]
         );
-        // Suelta con otra tecla lógica pero la misma física.
+        // Release with another logical key but the same physical one.
         let release = Event::Key {
             key: E::Q,
             physical_key: Some(E::A),
@@ -715,7 +686,7 @@ mod tests {
             modifiers: NONE,
         };
         assert_eq!(map.translate(&[release]), [HostAction::Up { id: id(E::A) }]);
-        assert!(map.translate(&[key(E::A, false, NONE)]).is_empty(), "ya suelta");
+        assert!(map.translate(&[key(E::A, false, NONE)]).is_empty(), "already released");
     }
 
     #[test]
@@ -736,7 +707,7 @@ mod tests {
             [HostAction::Brk { id: COPY_ID, down: true }, HostAction::Brk { id: COPY_ID, down: false }]
         );
         assert_eq!(map.translate(&[key(E::F12, true, ctrl)]), [HostAction::Tap(vec![KeyStroke::plain(Key::Off)])]);
-        assert!(map.translate(&[key(E::F12, true, ctrl)]).is_empty(), "OFF no se repite");
+        assert!(map.translate(&[key(E::F12, true, ctrl)]).is_empty(), "OFF does not repeat");
         assert!(map.translate(&[key(E::F12, false, NONE)]).is_empty());
         assert_eq!(
             map.translate(&[key(E::Backspace, true, NONE)]),
@@ -745,7 +716,7 @@ mod tests {
         assert_eq!(
             map.translate(&[key(E::Backspace, true, NONE)]),
             [HostAction::TapRepeat(vec![KeyStroke::plain(Key::Left), KeyStroke::shifted(Key::Left)])],
-            "Retroceso s\u{ed} se repite"
+            "Backspace does repeat"
         );
         assert_eq!(
             map.translate(&[key(E::Escape, true, NONE), key(E::Escape, false, NONE)]),
@@ -754,12 +725,12 @@ mod tests {
         let home = map.translate(&[key(E::Home, true, Modifiers::SHIFT)]);
         assert!(
             matches!(home.as_slice(), [HostAction::Down { stroke, .. }] if *stroke == KeyStroke::shifted(Key::Cl)),
-            "Shift+Inicio = CA: {home:?}"
+            "Shift+Home = CA: {home:?}"
         );
-        // Shift+F8 no tiene fila propia: es F8.
+        // Shift+F8 has no row of its own: it is F8.
         let sml = map.translate(&[key(E::F8, true, Modifiers::SHIFT)]);
         assert!(matches!(sml.as_slice(), [HostAction::Down { stroke, .. }] if *stroke == KeyStroke::plain(Key::Sml)));
-        // Otros atajos con Ctrl no son para la PC-1500.
+        // Other shortcuts with Ctrl are not for the PC-1500.
         assert!(map.translate(&[key(E::Plus, true, ctrl)]).is_empty());
         assert_eq!(map.translate(&[Event::WindowFocused(false)]), [HostAction::ReleaseAll]);
     }
@@ -826,7 +797,7 @@ mod tests {
     fn text_edit_registry_excludes_registered_fields() {
         let mut registry = TextEditRegistry::default();
         let field = egui::Id::new("ruta");
-        let button = egui::Id::new("boton");
+        let button = egui::Id::new("button");
         registry.register(field);
         assert!(registry.allows_capture(None));
         assert!(registry.allows_capture(Some(button)));
@@ -848,11 +819,11 @@ mod tests {
         for k in Key::ALL {
             assert!(hint(k).is_some(), "{k:?}");
         }
-        assert_eq!(hint(Key::Rsv).as_deref(), Some("Teclado PC: F9"));
-        assert_eq!(hint(Key::Off).as_deref(), Some("Teclado PC: Ctrl+F12"));
-        assert_eq!(hint(Key::LeftParen).as_deref(), Some("Teclado PC: ( \u{b7} con SHIFT: <"));
-        assert_eq!(hint(Key::On).as_deref(), Some("Teclado PC: Esc / F12 / Fin / Ctrl+C"));
-        assert_eq!(hint(Key::Cl).as_deref(), Some("Teclado PC: Inicio \u{b7} con SHIFT: Shift+Inicio"));
+        assert_eq!(hint(Key::Rsv).as_deref(), Some("PC keyboard: F9"));
+        assert_eq!(hint(Key::Off).as_deref(), Some("PC keyboard: Ctrl+F12"));
+        assert_eq!(hint(Key::LeftParen).as_deref(), Some("PC keyboard: ( \u{b7} with SHIFT: <"));
+        assert_eq!(hint(Key::On).as_deref(), Some("PC keyboard: Esc / F12 / End / Ctrl+C"));
+        assert_eq!(hint(Key::Cl).as_deref(), Some("PC keyboard: Home \u{b7} with SHIFT: Shift+Home"));
     }
 
     #[test]
@@ -861,7 +832,7 @@ mod tests {
         assert_eq!(chars.len(), 95);
         assert_eq!(chars.iter().filter(|(_, seq)| seq.is_none()).count(), 8, "' \\ _ ` {{ | }} ~");
         assert_eq!(action_label(SpecialAction::Tap { strokes: BACKSPACE, repeat: true }), "\u{2190}, SHIFT + \u{2190}");
-        // Ninguna fila de SPECIAL repetida (misma tecla y modificadores).
+        // No row of SPECIAL repeated (same key and modifiers).
         for (i, a) in SPECIAL.iter().enumerate() {
             for b in &SPECIAL[i + 1..] {
                 assert!(!(a.key == b.key && a.mods == b.mods), "{}", a.host_label);
@@ -869,9 +840,8 @@ mod tests {
         }
     }
 
-    /// Con el emulador de verdad: a 1x una tecla se mantiene y su suelta
-    /// cuenta; a más de 1x cada pulsación es un toque fijo y las sueltas
-    /// se ignoran.
+    /// With the real emulator: at 1x a key is held and its release counts; above 1x each key press
+    /// is a fixed tap and the releases are ignored.
     #[test]
     fn apply_follows_the_hold_policy() {
         let stroke = KeyStroke::plain(Key::Left);
@@ -880,9 +850,9 @@ mod tests {
         let mut pc = Pc1500::new_deterministic();
         apply(&mut pc, &HostAction::Down { id: 1, stroke, policy }, HoldPolicy::Hold);
         apply(&mut pc, &HostAction::Repeat { id: 1, stroke, policy }, HoldPolicy::Hold);
-        assert_eq!(pc.pending_keystrokes(), 1, "la repetici\u{f3}n la hace la ROM");
+        assert_eq!(pc.pending_keystrokes(), 1, "the ROM does the repeat");
         pc.run_frames(30);
-        assert!(pc.is_key_pressed(Key::Left), "mantenida");
+        assert!(pc.is_key_pressed(Key::Left), "held");
         apply(&mut pc, &HostAction::Up { id: 1 }, HoldPolicy::Hold);
         pc.run_frames(1);
         assert!(!pc.is_key_pressed(Key::Left));
@@ -890,37 +860,36 @@ mod tests {
         let mut fast = Pc1500::new_deterministic();
         apply(&mut fast, &HostAction::Down { id: 1, stroke, policy }, HoldPolicy::Tap);
         apply(&mut fast, &HostAction::Repeat { id: 1, stroke, policy }, HoldPolicy::Tap);
-        assert_eq!(fast.pending_keystrokes(), 1, "repetici\u{f3}n con cola: descartada");
+        assert_eq!(fast.pending_keystrokes(), 1, "repeat with a queue: dropped");
         fast.run_frames(30);
-        assert_eq!(fast.pending_keystrokes(), 0, "se sueltan solas");
+        assert_eq!(fast.pending_keystrokes(), 0, "they release by themselves");
         assert!(!fast.is_key_pressed(Key::Left));
         apply(&mut fast, &HostAction::Repeat { id: 1, stroke, policy }, HoldPolicy::Tap);
-        assert_eq!(fast.pending_keystrokes(), 1, "sin cola, cada repetici\u{f3}n es un toque");
+        assert_eq!(fast.pending_keystrokes(), 1, "without a queue, each repeat is a tap");
         apply(&mut fast, &HostAction::Up { id: 1 }, HoldPolicy::Tap);
         fast.run_frames(30);
         assert_eq!(fast.pending_keystrokes(), 0);
 
         assert_eq!(
             apply(&mut fast, &HostAction::TypeText("A_".to_owned()), HoldPolicy::Tap).as_deref(),
-            Some("car\u{e1}cter sin tecla en la PC-1500: _")
+            Some("character with no key on the PC-1500: _")
         );
         apply(&mut fast, &HostAction::Brk { id: 7, down: true }, HoldPolicy::Tap);
-        assert_eq!(fast.pending_keystrokes(), 0, "BRK cancela el texto");
+        assert_eq!(fast.pending_keystrokes(), 0, "BRK cancels the text");
         fast.run_frames(3);
-        assert!(!fast.is_key_pressed(Key::On), "a m\u{e1}s de 1x, BRK es un toque");
+        assert!(!fast.is_key_pressed(Key::On), "above 1x, BRK is a tap");
     }
 
-    /// Retroceso mantenido 2 s a 1x (primera repetición del SO a los
-    /// 500 ms y luego cada ~33 ms, es decir, cada 3 frames de ~11,5 ms):
-    /// la cola del alimentador no crece y, al soltar, la máquina deja de
-    /// borrar enseguida en vez de seguir comiéndose la línea.
+    /// Backspace held for 2 s at 1x (first OS repeat at 500 ms and then every ~33 ms, that is,
+    /// every 3 frames of ~11.5 ms): the feeder's queue does not grow and, on release, the machine
+    /// stops deleting at once instead of going on eating the line.
     #[test]
     fn held_backspace_does_not_flood_the_feeder() {
         const LINE: &str = "ABCDEFGHIJKLMNOPQRST";
         for policy in [HoldPolicy::Hold, HoldPolicy::Tap] {
             let mut pc = Pc1500::new_deterministic();
-            assert!(pc.boot().is_some(), "la ROM no lleg\u{f3} al prompt");
-            assert_eq!(pc.type_text(LINE), Ok(()), "letras");
+            assert!(pc.boot().is_some(), "the ROM did not reach the prompt");
+            assert_eq!(pc.type_text(LINE), Ok(()), "letters");
             assert!(pc.lcd_text().contains(LINE), "{:?}", pc.lcd_text());
 
             let mut map = HostKeymap::default();
@@ -934,24 +903,24 @@ mod tests {
             let mut repeats = 0;
             while repeats < 43 {
                 press(&mut pc, true);
-                assert!(pc.pending_keystrokes() <= 2, "cola acotada: {}", pc.pending_keystrokes());
+                assert!(pc.pending_keystrokes() <= 2, "bounded queue: {}", pc.pending_keystrokes());
                 pc.run_frames(3);
                 repeats += 1;
             }
             press(&mut pc, false);
-            assert!(pc.pending_keystrokes() <= 2, "como mucho el retroceso en curso");
+            assert!(pc.pending_keystrokes() <= 2, "at most the backspace in progress");
 
             let mut drain = 0;
             while pc.pending_keystrokes() > 0 {
-                assert!(drain < 30, "sigue borrando tras soltar");
+                assert!(drain < 30, "it goes on deleting after release");
                 pc.run_frames(1);
                 drain += 1;
             }
             pc.run_frames(10);
             let left = pc.lcd_text().chars().filter(char::is_ascii_uppercase).count();
             let deleted = LINE.len() - left;
-            // 172 frames a ~24 frames por retroceso: unos 7 u 8.
-            assert!((3..=10).contains(&deleted), "{policy:?}: borrados {deleted}: {:?}", pc.lcd_text());
+            // 172 frames at ~24 frames per backspace: some 7 or 8.
+            assert!((3..=10).contains(&deleted), "{policy:?}: deleted {deleted}: {:?}", pc.lcd_text());
         }
     }
 }

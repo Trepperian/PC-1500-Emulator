@@ -1,20 +1,16 @@
-//! La parte de la interfaz que carga y guarda programas BASIC del host
-//! (panel "Programa BASIC", arrastrar y soltar, argumento de la línea de
-//! órdenes), separada en funciones puras para poder probarla sin egui. El
-//! trabajo de verdad (tokenizar, formatos, escribir la RAM) está en
-//! `ceres_core::basic`.
+//! The part of the GUI that loads and saves the host's BASIC programs (the "BASIC program" panel,
+//! drag and drop, the command line argument), split into pure functions so that it can be tested
+//! without egui. The real work (tokenizing, formats, writing the RAM) is in `ceres_core::basic`.
 //!
-//! # La cola de carga
-//! Un programa solo se puede meter en la máquina con la ROM esperando
-//! teclado en el prompt (`Pc1500::is_at_basic_prompt`). Al pulsar
-//! "Cargar" (o soltar un archivo, o pasarlo por la línea de órdenes) el
-//! archivo se lee y se interpreta en el acto, para que un error de formato
-//! se vea enseguida, y el programa queda en una cola ([`PendingLoad`]) que
-//! se aplica en cuanto la ROM llega al prompt. Así funciona también justo
-//! después de arrancar o de pulsar Reset, cuando la ROM todavía está en su
-//! arranque en frío (~40 frames). Si pasan [`PENDING_TIMEOUT_TICKS`] ciclos
-//! emulados sin llegar al prompt (un programa en marcha, un `INPUT`
-//! esperando...), se abandona con un aviso.
+//! # The load queue
+//! A program can only be put into the machine with the ROM waiting for the keyboard at the prompt
+//! (`Pc1500::is_at_basic_prompt`). On clicking "Load BASIC" (or dropping a file, or passing it on
+//! the command line) the file is read and interpreted at once, so that a format error shows
+//! straight away, and the program waits in a queue ([`PendingLoad`]) that is applied as soon as the
+//! ROM reaches the prompt. So it also works right after starting or clicking Reset, while the ROM
+//! is still in its cold start (~40 frames). If [`PENDING_TIMEOUT_TICKS`] emulated cycles go by
+//! without reaching the prompt (a program running, an `INPUT` waiting...), it is given up with a
+//! warning.
 
 use std::path::{Path, PathBuf};
 
@@ -26,20 +22,20 @@ use ceres_core::{
     },
 };
 
-/// Frames emulados (~7 s a 1x) que una carga espera al prompt.
+/// Emulated frames (~7 s at 1x) that a load waits for the prompt.
 pub const PENDING_TIMEOUT_FRAMES: usize = 600;
-/// [`PENDING_TIMEOUT_FRAMES`] en ciclos de CPU.
+/// [`PENDING_TIMEOUT_FRAMES`] in CPU cycles.
 pub const PENDING_TIMEOUT_TICKS: usize = PENDING_TIMEOUT_FRAMES * TICKS_PER_FRAME;
 
-/// Mensaje cuando la carga se abandona.
+/// Message when the load is given up.
 pub const NOT_AT_PROMPT_MESSAGE: &str =
-    "La PC-1500 no est\u{e1} en el prompt BASIC (pulsa CL / BREAK)";
+    "The PC-1500 is not at the BASIC prompt (press CL / BREAK)";
 
-/// El desplegable de formato del panel.
+/// The panel's format drop-down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormatChoice {
-    /// Al cargar, por el contenido (`detect_format`); al guardar, por la
-    /// extensión (`SaveFormat::for_extension`).
+    /// When loading, by the contents (`detect_format`); when saving, by the extension
+    /// (`SaveFormat::for_extension`).
     Auto,
     AsciiCrLf,
     AsciiCr,
@@ -53,15 +49,15 @@ impl FormatChoice {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Auto => "Auto (por extensi\u{f3}n)",
+            Self::Auto => "Auto (by extension)",
             Self::AsciiCrLf => "ASCII CRLF (.txt)",
             Self::AsciiCr => "ASCII CR (.asc)",
-            Self::Tokenized => "Tokenizado (.bin)",
+            Self::Tokenized => "Tokenized (.bin)",
             Self::Ce158 => "CE-158 (.bas)",
         }
     }
 
-    /// El formato con que se lee `bytes` (`ext` sin punto).
+    /// The format with which `bytes` is read (`ext` without the dot).
     #[must_use]
     pub fn load_format(self, ext: Option<&str>, bytes: &[u8]) -> BasicFormat {
         match self {
@@ -72,9 +68,8 @@ impl FormatChoice {
         }
     }
 
-    /// El formato con que se guarda en `path`, o `None` para que lo
-    /// decida la extensión (`.bas` CE-158, `.asc` CR, `.txt` CRLF, `.bin`
-    /// tokenizado).
+    /// The format with which it is saved to `path`, or `None` to let the extension decide (`.bas`
+    /// CE-158, `.asc` CR, `.txt` CRLF, `.bin` tokenized).
     #[must_use]
     pub const fn save_format(self) -> Option<SaveFormat> {
         match self {
@@ -87,48 +82,46 @@ impl FormatChoice {
     }
 }
 
-/// Nombre corto de un formato de guardado, para el estado.
+/// Short name of a save format, for the status.
 #[must_use]
 pub const fn save_format_name(format: SaveFormat) -> &'static str {
     match format {
         SaveFormat::AsciiCrLf => "ASCII CRLF",
         SaveFormat::AsciiCr => "ASCII CR",
-        SaveFormat::Tokenized => "tokenizado",
+        SaveFormat::Tokenized => "tokenized",
         SaveFormat::Ce158 => "CE-158",
     }
 }
 
-/// Nombre corto de un formato de lectura, para el estado.
+/// Short name of a read format, for the status.
 #[must_use]
 pub const fn load_format_name(format: BasicFormat) -> &'static str {
     match format {
         BasicFormat::Ascii => "ASCII",
-        BasicFormat::Tokenized => "tokenizado",
+        BasicFormat::Tokenized => "tokenized",
         BasicFormat::Ce158 => "CE-158",
     }
 }
 
-/// Qué hacer con un archivo pasado por la línea de órdenes o soltado
-/// sobre la ventana.
+/// What to do with a file passed on the command line or dropped on the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartupFile {
-    /// Código máquina `.lh5` (y, como siempre, cualquier extensión
-    /// desconocida).
+    /// `.lh5` machine code (and, as always, any unknown extension).
     Lh5(PathBuf),
-    /// Programa BASIC: `.bas`, `.asc`, `.txt`, `.sbs`, `.bin`, `.tok`,
+    /// BASIC program: `.bas`, `.asc`, `.txt`, `.sbs`, `.bin`, `.tok`,
     /// `.img`.
     Basic(PathBuf),
 }
 
 impl StartupFile {
-    /// Decide por la extensión (da igual mayúsculas o minúsculas).
+    /// Decides by the extension (upper or lower case).
     #[must_use]
     pub fn from_path(path: PathBuf) -> Self {
         if is_basic_path(&path) { Self::Basic(path) } else { Self::Lh5(path) }
     }
 }
 
-/// `true` si la extensión de `path` es de un programa BASIC.
+/// `true` if the extension of `path` is that of a BASIC program.
 #[must_use]
 pub fn is_basic_path(path: &Path) -> bool {
     path.extension()
@@ -137,8 +130,7 @@ pub fn is_basic_path(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.as_str(), "bas" | "asc" | "txt" | "sbs" | "bin" | "tok" | "img"))
 }
 
-/// Lee los bytes de un archivo de programa con el formato elegido y las
-/// palabras clave de la máquina.
+/// Reads the bytes of a program file with the chosen format and the machine's keywords.
 pub fn decode(
     bytes: &[u8],
     path: &Path,
@@ -150,23 +142,22 @@ pub fn decode(
     decode_program(bytes, format, keywords, &AsciiOptions::default())
 }
 
-/// Una carga esperando a que la ROM llegue al prompt (ver el comentario
-/// del módulo).
+/// A load waiting for the ROM to reach the prompt (see the module's comment).
 #[derive(Clone, Debug)]
 pub struct PendingLoad {
     decoded: DecodedProgram,
-    /// De dónde viene (para el estado).
+    /// Where it comes from (for the status).
     source: String,
     waited_ticks: usize,
     last_ticks: Option<usize>,
 }
 
-/// Ver [`PendingLoad::poll`].
+/// See [`PendingLoad::poll`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingState {
-    /// Cargar ya.
+    /// Load now.
     Ready,
-    /// Seguir esperando.
+    /// Keep waiting.
     Waiting,
     /// Abandonar.
     TimedOut,
@@ -178,22 +169,21 @@ impl PendingLoad {
         Self { decoded, source, waited_ticks: 0, last_ticks: None }
     }
 
-    /// El programa leído, su formato y los avisos.
+    /// The program read, its format and the warnings.
     #[must_use]
     pub const fn decoded(&self) -> &DecodedProgram {
         &self.decoded
     }
 
-    /// De dónde viene (ruta o nombre del archivo).
+    /// Where it comes from (path or file name).
     #[must_use]
     pub const fn source(&self) -> &str {
         self.source.as_str()
     }
 
-    /// Se llama tras cada avance de la emulación con `at_prompt`
-    /// (`Pc1500::is_at_basic_prompt`) y `ticks` (`Pc1500::ticks`). El
-    /// tiempo de espera se cuenta en ciclos emulados (en pausa no corre);
-    /// si `ticks` retrocede es que hubo un Reset, y cuenta desde 0.
+    /// Called after each step of the emulation with `at_prompt` (`Pc1500::is_at_basic_prompt`) and
+    /// `ticks` (`Pc1500::ticks`). The waiting time is counted in emulated cycles (it does not run
+    /// while paused); if `ticks` goes back, there was a Reset, and it counts from 0.
     pub const fn poll(&mut self, at_prompt: bool, ticks: usize) -> PendingState {
         let elapsed = match self.last_ticks {
             Some(last) if ticks >= last => ticks - last,
@@ -212,7 +202,7 @@ impl PendingLoad {
     }
 }
 
-/// Los avisos en una línea, separados por `; `.
+/// The warnings on one line, separated by `; `.
 #[must_use]
 pub fn warnings_text(warnings: &[Warning]) -> String {
     let mut text = String::new();
@@ -225,11 +215,11 @@ pub fn warnings_text(warnings: &[Warning]) -> String {
     text
 }
 
-/// El estado tras una carga correcta.
+/// The status after a load that went well.
 #[must_use]
 pub fn load_status(source: &str, format: BasicFormat, report: &LoadReport, cold_boot_screen: bool) -> String {
     let mut status = format!(
-        "Cargado {source} ({}): {} l\u{ed}neas, {} bytes en ${:04X}-${:04X}, {} libres",
+        "Loaded {source} ({}): {} lines, {} bytes at ${:04X}-${:04X}, {} free",
         load_format_name(format),
         report.lines,
         report.bytes,
@@ -238,10 +228,10 @@ pub fn load_status(source: &str, format: BasicFormat, report: &LoadReport, cold_
         report.free
     );
     if cold_boot_screen {
-        status.push_str(" \u{2014} pulsa CL para quitar NEW0? (no hagas NEW0)");
+        status.push_str(" \u{2014} press CL to clear NEW0? (do not type NEW0)");
     }
     if !report.warnings.is_empty() {
-        status.push_str(". Avisos: ");
+        status.push_str(". Warnings: ");
         status.push_str(&warnings_text(&report.warnings));
     }
     status
@@ -261,7 +251,7 @@ mod tests {
     #[test]
     fn cli_routing_by_extension() {
         assert_eq!(StartupFile::from_path("a.lh5".into()), StartupFile::Lh5("a.lh5".into()), ".lh5");
-        assert_eq!(StartupFile::from_path("a".into()), StartupFile::Lh5("a".into()), "sin extensi\u{f3}n");
+        assert_eq!(StartupFile::from_path("a".into()), StartupFile::Lh5("a".into()), "no extension");
         for name in ["a.bas", "A.BAS", "a.asc", "a.txt", "a.bin", "a.tok"] {
             assert_eq!(StartupFile::from_path(name.into()), StartupFile::Basic(name.into()), "{name}");
         }
@@ -271,25 +261,25 @@ mod tests {
     fn format_choices() {
         assert_eq!(FormatChoice::Auto.save_format(), None, "auto");
         assert_eq!(FormatChoice::AsciiCr.save_format(), Some(SaveFormat::AsciiCr), "CR");
-        assert_eq!(FormatChoice::AsciiCrLf.load_format(Some("bin"), b"\x00\x0a"), BasicFormat::Ascii, "forzado");
+        assert_eq!(FormatChoice::AsciiCrLf.load_format(Some("bin"), b"\x00\x0a"), BasicFormat::Ascii, "forced");
         assert_eq!(FormatChoice::Auto.load_format(Some("bin"), b"10 A"), BasicFormat::Tokenized, ".bin");
-        assert_eq!(FormatChoice::Auto.load_format(Some("bas"), b"10 A"), BasicFormat::Ascii, "texto");
-        assert!(FormatChoice::ALL.iter().all(|c| !c.label().is_empty()), "con r\u{f3}tulo");
+        assert_eq!(FormatChoice::Auto.load_format(Some("bas"), b"10 A"), BasicFormat::Ascii, "text");
+        assert!(FormatChoice::ALL.iter().all(|c| !c.label().is_empty()), "with a label");
     }
 
     #[test]
     fn pending_load_waits_in_emulated_time() {
         let mut p = pending();
-        assert_eq!(p.poll(false, 1000), PendingState::Waiting, "primera vez");
-        assert_eq!(p.poll(false, 1000 + PENDING_TIMEOUT_TICKS), PendingState::Waiting, "justo el l\u{ed}mite");
-        assert_eq!(p.poll(true, 2000 + PENDING_TIMEOUT_TICKS), PendingState::Ready, "en el prompt");
-        assert_eq!(p.poll(false, 2001 + PENDING_TIMEOUT_TICKS), PendingState::TimedOut, "pasado el l\u{ed}mite");
-        // Un Reset (los ciclos vuelven a 0) no hace esperar de más ni de
-        // menos: cuenta lo emulado desde el reset.
+        assert_eq!(p.poll(false, 1000), PendingState::Waiting, "first time");
+        assert_eq!(p.poll(false, 1000 + PENDING_TIMEOUT_TICKS), PendingState::Waiting, "right at the limit");
+        assert_eq!(p.poll(true, 2000 + PENDING_TIMEOUT_TICKS), PendingState::Ready, "at the prompt");
+        assert_eq!(p.poll(false, 2001 + PENDING_TIMEOUT_TICKS), PendingState::TimedOut, "past the limit");
+        // A Reset (the cycles go back to 0) makes it wait neither more nor less: it counts what was
+        // emulated since the reset.
         let mut across_reset = pending();
-        assert_eq!(across_reset.poll(false, 5_000_000), PendingState::Waiting, "antes del reset");
+        assert_eq!(across_reset.poll(false, 5_000_000), PendingState::Waiting, "before the reset");
         assert_eq!(across_reset.poll(false, 100), PendingState::Waiting, "reset");
-        assert_eq!(across_reset.poll(true, 200), PendingState::Ready, "arranc\u{f3}");
+        assert_eq!(across_reset.poll(true, 200), PendingState::Ready, "it booted");
     }
 
     #[test]
@@ -303,8 +293,8 @@ mod tests {
             warnings: vec![Warning { line: Some(20), kind: WarningKind::DuplicateLine }],
         };
         let status = load_status("j.bas", BasicFormat::Ascii, &report, false);
-        assert!(status.starts_with("Cargado j.bas (ASCII): 60 l\u{ed}neas, 1452 bytes en $01C5-$0771"), "{status}");
-        assert!(status.contains("Avisos: l\u{ed}nea 20:"), "{status}");
-        assert!(load_status("j", BasicFormat::Ce158, &report, true).contains("pulsa CL"), "arranque en fr\u{ed}o");
+        assert!(status.starts_with("Loaded j.bas (ASCII): 60 lines, 1452 bytes at $01C5-$0771"), "{status}");
+        assert!(status.contains("Warnings: line 20:"), "{status}");
+        assert!(load_status("j", BasicFormat::Ce158, &report, true).contains("press CL"), "cold start");
     }
 }

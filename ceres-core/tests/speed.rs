@@ -1,12 +1,10 @@
-//! Tests de la API de emulación por presupuesto de ciclos
-//! ([`Pc1500::run_for_ticks`], [`Pc1500::ticks`]) que usa el planificador
-//! de tiempo real de la GUI, del avance rápido de la CPU parada en `HLT`
-//! ([`Pc1500::set_fast_halt`]) y de que los ganchos "por frame" (el freno
-//! del auto-apagado, el enganche de `DISP`) no dependan de en qué trozos
-//! se reparta la emulación. Todo contra la ROM real, con el arnés.
+//! Tests of the emulation API by budget of cycles ([`Pc1500::run_for_ticks`], [`Pc1500::ticks`])
+//! that the GUI's real-time scheduler uses, of the fast forward of the CPU halted in `HLT`
+//! ([`Pc1500::set_fast_halt`]) and of the "per frame" hooks (the brake on the automatic power-off,
+//! the latch of `DISP`) not depending on the pieces the emulation is split in. All against the real
+//! ROM, with the harness.
 //!
-//! Al final hay un benchmark de rendimiento (`#[ignore]`, solo tiene
-//! sentido en release):
+//! At the end there is a performance benchmark (`#[ignore]`, it only makes sense in release):
 //!
 //! ```text
 //! cargo test --release -p ceres-core --test speed -- --ignored --nocapture
@@ -19,24 +17,23 @@ use ceres_core::{
     harness::KeyStroke,
 };
 
-/// Ciclos por repintado de la GUI a 0.02x en un monitor de 60 Hz
-/// (`1.3e6 × 0.02 / 60`): el trozo más pequeño que le llega a
-/// `run_for_ticks` en uso normal.
+/// Cycles per repaint of the GUI at 0.02x on a 60 Hz monitor (`1.3e6 × 0.02 / 60`): the smallest
+/// piece that reaches `run_for_ticks` in normal use.
 const SLOW_CHUNK: usize = 433;
 
-/// Contador de auto-apagado de la ROM, $7B0A-$7B0C.
+/// The ROM's power-off counter, $7B0A-$7B0C.
 const APOW_CTR: u32 = 0x7B0A;
 
-/// RAM de usuario estándar más la expansión CE-161 ($0100-$47FF) y la RAM
-/// del sistema ($7600-$7FFF): todo lo que puede cambiar la ROM.
-const RAM_RANGES: [(u32, usize); 2] = [(0x0100, 0x4700), (0x7600, 0x0A00)];
+/// User RAM with the CE-161 ($0000-$47FF) and the system RAM ($7600-$7FFF): everything the ROM can
+/// change.
+const RAM_RANGES: [(u32, usize); 2] = [(0x0000, 0x4800), (0x7600, 0x0A00)];
 
-/// Máximo de frames que se espera a que la ROM vuelva al teclado.
+/// Maximum of frames waited for the ROM to go back to the keyboard.
 const READY_MAX_FRAMES: usize = 600;
 
 fn booted() -> Pc1500 {
     let mut pc = Pc1500::new_deterministic();
-    assert!(pc.boot().is_some(), "la ROM no lleg\u{f3} al prompt");
+    assert!(pc.boot().is_some(), "the ROM did not reach the prompt");
     pc
 }
 
@@ -55,22 +52,21 @@ fn enter_line(pc: &mut Pc1500, line: &str) {
 
 fn type_keys(pc: &mut Pc1500, text: &str) {
     if let Err(c) = pc.type_text(text) {
-        panic!("sin tecla: {c:?}");
+        panic!("no key: {c:?}");
     }
 }
 
 fn wait_ready(pc: &mut Pc1500) {
     assert!(
         pc.run_until_ready(READY_MAX_FRAMES).is_some(),
-        "la ROM no volvi\u{f3} al teclado; LCD = [{}]",
+        "the ROM did not go back to the keyboard; LCD = [{}]",
         pc.lcd_text()
     );
 }
 
-/// Ejecuta exactamente hasta el ciclo `target` en trozos de `chunk`
-/// ciclos (el último, más corto). Termina justo en `target` si `target`
-/// es una frontera de instrucción de la misma emulación hecha en otros
-/// trozos (ver `chunked_run_matches_whole_frames`).
+/// Runs exactly up to cycle `target` in pieces of `chunk` cycles (the last one, shorter). It ends
+/// right at `target` if `target` is an instruction boundary of the same emulation done in other
+/// pieces (see `chunked_run_matches_whole_frames`).
 fn run_chunked_until(pc: &mut Pc1500, target: usize, chunk: usize) {
     while pc.ticks() < target {
         let budget = chunk.min(target - pc.ticks());
@@ -78,7 +74,7 @@ fn run_chunked_until(pc: &mut Pc1500, target: usize, chunk: usize) {
     }
 }
 
-/// Escribe un `.lh5` en el directorio temporal de los tests y lo carga.
+/// Writes a `.lh5` to the tests' temporary folder and loads it.
 fn load_lh5(pc: &mut Pc1500, name: &str, load_addr: u16, code: &[u8]) {
     let mut file = load_addr.to_le_bytes().to_vec();
     let len = u16::try_from(code.len()).unwrap_or(u16::MAX);
@@ -97,17 +93,17 @@ fn load_lh5(pc: &mut Pc1500, name: &str, load_addr: u16, code: &[u8]) {
 fn run_for_ticks_spends_at_least_the_budget() {
     let mut pc = Pc1500::new_deterministic();
     assert_eq!(pc.ticks(), 0);
-    assert_eq!(pc.run_for_ticks(0), 0, "presupuesto 0: no ejecuta nada");
+    assert_eq!(pc.run_for_ticks(0), 0, "budget 0: runs nothing");
     assert_eq!(pc.ticks(), 0);
 
     let first = pc.run_for_ticks(TICKS_PER_FRAME);
     assert!(
         (TICKS_PER_FRAME..TICKS_PER_FRAME + 64).contains(&first),
-        "ran = {first}: como mucho una instrucci\u{f3}n de m\u{e1}s"
+        "ran = {first}: at most one instruction too many"
     );
     assert_eq!(pc.ticks(), first);
 
-    // Trozos pequeños, también con la CPU parada en `HLT` (el prompt).
+    // Small pieces, also with the CPU halted in `HLT` (the prompt).
     assert!(pc.boot().is_some());
     for budget in [1, 2, 3, 41, 42, 43, SLOW_CHUNK] {
         let before = pc.ticks();
@@ -131,9 +127,8 @@ fn step_frame_is_run_for_ticks_of_one_frame() {
     assert_eq!(ram(&a), ram(&b));
 }
 
-/// Repartir la misma emulación en trozos de 433 ciclos (0.02x en la GUI)
-/// o en frames enteros da exactamente lo mismo, con y sin avance rápido
-/// en `HLT`, incluso terminando en el mismo ciclo.
+/// Splitting the same emulation in pieces of 433 cycles (0.02x in the GUI) or in whole frames gives
+/// exactly the same, with and without the fast forward in `HLT`, even ending at the same cycle.
 #[test]
 fn chunked_run_matches_whole_frames() {
     for fast_halt in [true, false] {
@@ -156,17 +151,14 @@ fn chunked_run_matches_whole_frames() {
     }
 }
 
-/// Una "foto" del estado visible tras un paso de `halt_script`: ciclos,
-/// LCD, indicadores y PC.
+/// A "snapshot" of the visible state after a step of `halt_script`: cycles, LCD, indicators and PC.
 type Shot = (usize, String, [u8; 2], u16);
 
-/// Guion que ejercita la CPU parada en `HLT` de todas las formas que se
-/// le ocurren a un usuario: arranque en frío, tecleo y edición con
-/// autorrepetición de las flechas, un programa con `WAIT` (que cuenta
-/// pulsos del reloj `µPD1990AC` en PB5), BREAK con `ON` (IR2 desde el
-/// LH5810, el único despertar que no es el temporizador) y `OFF`/`ON`.
-/// Devuelve una "foto" (ciclos, LCD, indicadores, PC) tras cada paso y la
-/// RAM final.
+/// A script that exercises the CPU halted in `HLT` in every way a user can think of: cold start,
+/// typing and editing with the arrows' key repeat, a program with `WAIT` (which counts pulses of
+/// the `µPD1990AC` clock on PB5), BREAK with `ON` (IR2 from the LH5810, the only wake-up that is
+/// not the timer) and `OFF`/`ON`. It returns a "snapshot" (cycles, LCD, indicators, PC) after each
+/// step and the final RAM.
 fn halt_script(fast_halt: bool) -> (Vec<Shot>, Vec<u8>) {
     let mut pc = Pc1500::new_deterministic();
     pc.set_fast_halt(fast_halt);
@@ -182,7 +174,7 @@ fn halt_script(fast_halt: bool) -> (Vec<Shot>, Vec<u8>) {
     };
 
     let boot_frames = pc.boot();
-    assert!(boot_frames.is_some(), "la ROM no lleg\u{f3} al prompt");
+    assert!(boot_frames.is_some(), "the ROM did not reach the prompt");
     shot(&pc);
 
     enter_line(&mut pc, "NEW");
@@ -191,7 +183,7 @@ fn halt_script(fast_halt: bool) -> (Vec<Shot>, Vec<u8>) {
     shot(&pc);
 
     type_keys(&mut pc, "ABCDEFGH");
-    // 4 frames: un solo paso del cursor; 100: autorrepetición de la ROM.
+    // 4 frames: a single step of the cursor; 100: the ROM's key repeat.
     pc.tap_key_for(Key::Left, 4, 4);
     type_keys(&mut pc, "X");
     wait_ready(&mut pc);
@@ -201,7 +193,7 @@ fn halt_script(fast_halt: bool) -> (Vec<Shot>, Vec<u8>) {
     wait_ready(&mut pc);
     shot(&pc);
 
-    // BREAK en el prompt: borra la línea.
+    // BREAK at the prompt: clears the line.
     pc.tap_key_for(Key::On, 1, 0);
     wait_ready(&mut pc);
     shot(&pc);
@@ -220,9 +212,9 @@ fn halt_script(fast_halt: bool) -> (Vec<Shot>, Vec<u8>) {
 
     pc.tap_key_for(Key::Off, 4, 4);
     pc.run_frames(20);
-    assert!(!pc.is_powered_on(), "OFF no apag\u{f3}");
+    assert!(!pc.is_powered_on(), "OFF did not switch it off");
     shot(&pc);
-    assert!(pc.power_on().is_some(), "ON no encendi\u{f3}");
+    assert!(pc.power_on().is_some(), "ON did not switch it on");
     shot(&pc);
     pc.run_frames(300);
     shot(&pc);
@@ -230,26 +222,26 @@ fn halt_script(fast_halt: bool) -> (Vec<Shot>, Vec<u8>) {
     (shots, ram(&pc))
 }
 
-/// El avance rápido en `HLT` no cambia nada de la emulación: el mismo
-/// guion da los mismos ciclos, LCD, indicadores, PC y RAM en cada paso.
+/// The fast forward in `HLT` changes nothing in the emulation: the same script gives the same
+/// cycles, LCD, indicators, PC and RAM at each step.
 #[test]
 fn fast_halt_is_equivalent_to_two_state_steps() {
     let (fast_shots, fast_ram) = halt_script(true);
     let (slow_shots, slow_ram) = halt_script(false);
     assert_eq!(fast_shots.len(), slow_shots.len());
     for (i, (fast, slow)) in fast_shots.iter().zip(&slow_shots).enumerate() {
-        assert_eq!(fast, slow, "paso {i}");
+        assert_eq!(fast, slow, "step {i}");
     }
-    assert!(fast_ram == slow_ram, "la RAM final difiere");
+    assert!(fast_ram == slow_ram, "the final RAM differs");
 
-    // Y el guion de verdad hace algo (no compara dos máquinas colgadas).
+    // And the script really does something (it does not compare two hung machines).
     assert!(fast_shots[2].1.starts_with("ABCDEFGX"), "LCD = [{}]", fast_shots[2].1);
     assert!(fast_shots[4].1.trim_end() == ">", "LCD = [{}]", fast_shots[4].1);
     assert!(fast_shots[6].1.trim_start().starts_with("BREAK IN 10"), "LCD = [{}]", fast_shots[6].1);
 }
 
-/// El avance rápido se conserva con `reset()` (es una opción del
-/// emulador) y `ticks()` vuelve a 0.
+/// The fast forward is kept by `reset()` (it is an option of the emulator) and `ticks()` goes back
+/// to 0.
 #[test]
 fn reset_keeps_fast_halt_option() {
     let mut pc = booted();
@@ -257,11 +249,11 @@ fn reset_keeps_fast_halt_option() {
     pc.reset();
     assert!(!pc.fast_halt());
     assert_eq!(pc.ticks(), 0);
-    assert!(Pc1500::new().fast_halt(), "activado por defecto");
+    assert!(Pc1500::new().fast_halt(), "on by default");
 }
 
-/// El freno del auto-apagado es un gancho por frame emulado: funciona
-/// igual cuando la GUI emula en trozos pequeños con `run_for_ticks`.
+/// The brake on the automatic power-off is a per-emulated-frame hook: it works the same when the
+/// GUI emulates in small pieces with `run_for_ticks`.
 #[test]
 fn auto_off_hold_works_with_small_chunks() {
     let mut pc = booted();
@@ -271,10 +263,10 @@ fn auto_off_hold_works_with_small_chunks() {
     }
     let target = pc.ticks() + 200 * TICKS_PER_FRAME;
     run_chunked_until(&mut pc, target, SLOW_CHUNK);
-    assert!(pc.is_powered_on(), "no deber\u{ed}a auto-apagarse");
-    assert_eq!(pc.read_byte(APOW_CTR), 0xFE, "contador devuelto al inicio");
+    assert!(pc.is_powered_on(), "it should not switch itself off");
+    assert_eq!(pc.read_byte(APOW_CTR), 0xFE, "counter set back to its start");
 
-    // Activado, la ROM sí se apaga, también en trozos.
+    // Enabled, the ROM does switch off, also in pieces.
     pc.set_auto_power_off(true);
     for addr in APOW_CTR..APOW_CTR + 3 {
         pc.write_byte(addr, 0xFF);
@@ -283,15 +275,13 @@ fn auto_off_hold_works_with_small_chunks() {
     while pc.is_powered_on() && pc.ticks() < deadline {
         pc.run_for_ticks(SLOW_CHUNK);
     }
-    assert!(!pc.is_powered_on(), "deber\u{ed}a auto-apagarse");
+    assert!(!pc.is_powered_on(), "it should switch itself off");
 }
 
-/// A 0.02x la GUI mira el LCD cada 433 ciclos emulados, menos que el
-/// pulso `RDP`...`SDP` del bucle ocioso de teclado (2090 ciclos, cada
-/// ~6.3 millones en el prompt): con un enganche de `DISP` medido entre
-/// llamadas a `display()` el LCD se habría visto apagado varios
-/// repintados seguidos en cada pulso. Con la persistencia en ciclos
-/// emulados no se apaga nunca.
+/// At 0.02x the GUI looks at the LCD every 433 emulated cycles, less than the `RDP`...`SDP` pulse
+/// of the idle keyboard loop (2090 cycles, every ~6.3 million at the prompt): with a latch of
+/// `DISP` measured between calls to `display()` the LCD would have shown off for several repaints
+/// in a row at each pulse. With the persistence in emulated cycles it never goes off.
 #[test]
 fn lcd_never_blanks_at_slow_motion() {
     let mut pc = booted();
@@ -300,27 +290,27 @@ fn lcd_never_blanks_at_slow_motion() {
     let mut disp_seen = pc.cpu().display_enabled();
     let end = pc.ticks() + 500 * TICKS_PER_FRAME;
     while pc.ticks() < end {
-        // Una instrucción (o un paso de `HLT`) cada vez, para ver `DISP`
-        // tras cada una como lo ve el enganche.
+        // One instruction (or one step of `HLT`) at a time, to see `DISP` after each one as the
+        // latch sees it.
         pc.run_for_ticks(1);
         disp_seen |= pc.cpu().display_enabled();
         if pc.ticks() - window_start >= SLOW_CHUNK {
             if !disp_seen {
                 windows_without_disp += 1;
             }
-            assert!(pc.display().is_on(), "LCD apagado en el ciclo {}", pc.ticks());
+            assert!(pc.display().is_on(), "LCD off at cycle {}", pc.ticks());
             window_start = pc.ticks();
             disp_seen = pc.cpu().display_enabled();
         }
     }
     assert!(
         windows_without_disp > 0,
-        "ninguna ventana de {SLOW_CHUNK} ciclos cay\u{f3} entera dentro del pulso RDP"
+        "no window of {SLOW_CHUNK} cycles fell wholly inside the RDP pulse"
     );
 }
 
-/// Un programa que apaga el LCD de verdad (`RDP` en bucle) sí se ve
-/// apagado una vez pasada la persistencia, y no antes.
+/// A program that really turns the LCD off (`RDP` in a loop) does show off once the persistence has
+/// gone by, and not before.
 #[test]
 fn lcd_persistence_is_measured_in_emulated_ticks() {
     let mut pc = booted();
@@ -330,16 +320,16 @@ fn lcd_persistence_is_measured_in_emulated_ticks() {
     assert!(!pc.cpu().display_enabled());
     let off_since = pc.ticks();
     pc.run_for_ticks(LCD_PERSISTENCE_TICKS / 2);
-    assert!(pc.display().is_on(), "todav\u{ed}a dentro de la persistencia");
+    assert!(pc.display().is_on(), "still inside the persistence");
     while pc.ticks() < off_since + LCD_PERSISTENCE_TICKS {
         pc.run_for_ticks(SLOW_CHUNK);
     }
     assert!(!pc.display().is_on());
-    assert!(!pc.display().is_on(), "segunda muestra sin emular");
+    assert!(!pc.display().is_on(), "second sample without emulating");
 }
 
-/// Velocidad de emulación en el host, como múltiplo del tiempo real
-/// (×100, para no usar coma flotante en el núcleo).
+/// Emulation speed on the host, as a multiple of real time (×100, so as not to use floating point
+/// in the core).
 fn speed_x100(ticks: usize, micros: u128) -> u128 {
     let ticks = u128::try_from(ticks).unwrap_or(u128::MAX);
     let hz = u128::try_from(CPU_HZ).unwrap_or(1);
@@ -361,7 +351,7 @@ fn print_bench(label: &str, frames: usize, (x100, micros): (u128, u128)) {
     let fps = u128::try_from(frames).unwrap_or(0) * 1_000_000 / micros.max(1);
     let mhz_x100 = x100 * u128::try_from(CPU_HZ).unwrap_or(0) / 1_000_000;
     println!(
-        "{label:<32} {frames} frames en {micros} \u{b5}s: {fps} frames/s = x{}.{:02} tiempo real = {}.{:02} MHz",
+        "{label:<32} {frames} frames in {micros} \u{b5}s: {fps} frames/s = x{}.{:02} real time = {}.{:02} MHz",
         x100 / 100,
         x100 % 100,
         mhz_x100 / 100,
@@ -369,31 +359,30 @@ fn print_bench(label: &str, frames: usize, (x100, micros): (u128, u128)) {
     );
 }
 
-/// Benchmark (solo release): prompt ocioso con y sin avance rápido en
-/// `HLT` y un bucle activo de la CPU (`NOP` / `BCH -3`).
+/// Benchmark (release only): idle prompt with and without the fast forward in `HLT` and a busy CPU
+/// loop (`NOP` / `BCH -3`).
 #[test]
-#[ignore = "benchmark: ejecutar en release con --ignored --nocapture"]
+#[ignore = "benchmark: run in release with --ignored --nocapture"]
 fn throughput_benchmark() {
     const FRAMES: usize = 3000;
 
     let mut idle_fast = booted();
     let fast = bench(&mut idle_fast, FRAMES);
-    print_bench("ocioso, avance r\u{e1}pido en HLT", FRAMES, fast);
+    print_bench("idle, fast forward in HLT", FRAMES, fast);
 
     let mut idle_slow = booted();
     idle_slow.set_fast_halt(false);
     let slow = bench(&mut idle_slow, FRAMES);
-    print_bench("ocioso, HLT de 2 en 2", FRAMES, slow);
+    print_bench("idle, HLT 2 by 2", FRAMES, slow);
 
     let mut busy = booted();
     // $4000: `NOP` (38), `BCH -3` (9E 03).
     load_lh5(&mut busy, "speed_busy_loop.lh5", 0x4000, &[0x38, 0x9E, 0x03]);
     let active = bench(&mut busy, FRAMES);
-    print_bench("bucle activo NOP/BCH", FRAMES, active);
+    print_bench("busy loop NOP/BCH", FRAMES, active);
 
-    // Holgado: el portátil de referencia da x465-x511 en ocioso con el
-    // avance rápido y x58-x132 sin él, con mucho ruido por el escalado
-    // de frecuencia.
-    assert!(fast.0 > slow.0, "el avance r\u{e1}pido deber\u{ed}a ganar en ocioso");
-    assert!(fast.0 >= 150 * 100, "ocioso con avance r\u{e1}pido por debajo de x150");
+    // Generous: the reference laptop gives x465-x511 idle with the fast forward and x58-x132
+    // without it, with a lot of noise because of frequency scaling.
+    assert!(fast.0 > slow.0, "the fast forward should win when idle");
+    assert!(fast.0 >= 150 * 100, "idle with fast forward below x150");
 }

@@ -43,9 +43,8 @@ fn main() -> anyhow::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            // La carátula (ver `faceplate`) mide 679×299 unidades: a
-            // 1280×760, con el panel de controles arriba, sale a casi el
-            // doble del tamaño real de la PC-1500.
+            // The faceplate (see `faceplate`) is 679×299 units: at 1280×760, with the control panel
+            // above it, it comes out at almost twice the real PC-1500's size.
             .with_inner_size([1280.0, 760.0])
             .with_min_inner_size([720.0, 420.0])
             .with_title(title),

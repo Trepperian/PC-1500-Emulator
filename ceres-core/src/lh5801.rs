@@ -4,9 +4,8 @@ use crate::{Pc1500, host_io};
 
 const DO_DEBUG_ROM: bool = false;
 
-/// Estados de CPU entre dos avances del temporizador interno (el LFSR de
-/// 9 bits `tm`, ver `timer_inc`), igual que `NB_STATE_PER_TIMER` en
-/// `PockEmul`.
+/// CPU states between two steps of the internal timer (the 9-bit LFSR `tm`, see `timer_inc`), the
+/// same as `NB_STATE_PER_TIMER` in `PockEmul`.
 const TIMER_PERIOD_STATES: usize = 42;
 
 const CF: u8 = 0x01;
@@ -44,13 +43,12 @@ pub struct Lh5801 {
     step_previous_state: usize,
     ticks: usize,
 
-    /// Avance rápido en `HLT` activado (ver `Pc1500::halted_states`).
+    /// Fast forward in `HLT` enabled (see `Pc1500::halted_states`).
     fast_halt: bool,
-    /// Ciclo (`ticks`) que el avance rápido en `HLT` no debe saltarse:
-    /// el final del presupuesto de `Pc1500::run_for_ticks` o su próximo
-    /// gancho por frame, lo que llegue antes. Fuera de `run_for_ticks`
-    /// ya ha pasado, y entonces la CPU parada avanza de 2 en 2 como sin
-    /// el avance rápido.
+    /// Cycle (`ticks`) that the fast forward in `HLT` must not skip: the end of
+    /// `Pc1500::run_for_ticks`'s budget or its next per-frame hook, whichever comes first. Outside
+    /// `run_for_ticks` it has already passed, and then the halted CPU moves on 2 by 2 as without
+    /// the fast forward.
     halt_deadline: usize,
 
     // DEBUG UTILS
@@ -59,37 +57,31 @@ pub struct Lh5801 {
 }
 
 impl Lh5801 {
-    /// Flag `BF` ("power flag") del LH5801: `true` mientras la máquina
-    /// está encendida. Lo pone a 0 la instrucción `OFF` (`FD 4C`) y a 1
-    /// el reset de la CPU.
+    /// The LH5801's `BF` flag ("power flag"): `true` while the machine is on. The `OFF` instruction
+    /// (`FD 4C`) clears it and the CPU reset sets it.
     ///
-    /// En la PC-1500 real `OFF` corta de verdad la alimentación de la
-    /// CPU: no se ejecuta nada más hasta que se pulsa `ON`, que la
-    /// rearranca desde el vector de reset ($FFFE → `RESET`, $E000) con
-    /// la RAM intacta. Ver [`Lh5801::power_on`] y la rama de apagado de
-    /// `Pc1500::step_cpu`.
+    /// On the real PC-1500 `OFF` really cuts the CPU's power: nothing more runs until `ON` is
+    /// pressed, which restarts it from the reset vector ($FFFE → `RESET`, $E000) with the RAM
+    /// intact. See [`Lh5801::power_on`] and the powered-off branch of `Pc1500::step_cpu`.
     #[must_use]
     pub const fn bf(&self) -> bool {
         self.bf
     }
 
-    /// Enciende la máquina como lo hace la tecla `ON` con la CPU apagada
-    /// (`BF` = 0): pone `BF` a 1 y deja pendiente un reset de CPU, que el
-    /// siguiente `step_cpu` ejecuta (P = ($FFFE) = $E000, registros a 0,
-    /// RAM conservada). La propia rutina `RESET` de la ROM decide luego
-    /// qué hacer mirando la firma que dejó al apagarse en $7A10-$7A1F:
-    /// $A0..$AF (auto-apagado, `AUTO_OFF` $E33F) → reanuda la sesión
-    /// exactamente donde estaba (`RESET_22` $E147 restaura S desde `ARS`
-    /// $7A30); $50..$5F (tecla `OFF`, `BTN_OFF` $CD71) → `COLD_START`
-    /// conservando el programa; ninguna → inicialización en frío.
+    /// Switches the machine on as the `ON` key does with the CPU off (`BF` = 0): sets `BF` and
+    /// leaves a CPU reset pending, which the next `step_cpu` runs (P = ($FFFE) = $E000, registers
+    /// at 0, RAM kept). The ROM's own `RESET` routine then decides what to do from the signature it
+    /// left at $7A10-$7A1F when it switched off: $A0..$AF (automatic power-off, `AUTO_OFF` $E33F) →
+    /// resumes the session exactly where it was (`RESET_22` $E147 restores S from `ARS` $7A30);
+    /// $50..$5F (the `OFF` key, `BTN_OFF` $CD71) → `COLD_START` keeping the program; none → cold
+    /// initialization.
     pub const fn power_on(&mut self) {
         self.bf = true;
         self.reset_flag = true;
     }
 
-    /// Fuerza `BF` sin pasar por un reset de CPU. Solo para código que
-    /// fija el PC desde fuera (`Pc1500::load_lh5_file`): si la máquina
-    /// estaba apagada, el programa cargado no llegaría a ejecutarse.
+    /// Forces `BF` without a CPU reset. Only for code that sets the PC from outside
+    /// (`Pc1500::load_lh5_file`): if the machine was off, the program loaded would never run.
     pub const fn set_bf(&mut self, bf: bool) {
         self.bf = bf;
     }
@@ -239,17 +231,17 @@ impl Lh5801 {
         self.ticks = ticks;
     }
 
-    /// Ver `Pc1500::set_fast_halt`.
+    /// See `Pc1500::set_fast_halt`.
     pub(crate) const fn set_fast_halt(&mut self, enabled: bool) {
         self.fast_halt = enabled;
     }
 
-    /// Ver `Pc1500::set_fast_halt`.
+    /// See `Pc1500::set_fast_halt`.
     pub(crate) const fn fast_halt(&self) -> bool {
         self.fast_halt
     }
 
-    /// Ver el campo `halt_deadline`.
+    /// See the `halt_deadline` field.
     pub(crate) const fn set_halt_deadline(&mut self, ticks: usize) {
         self.halt_deadline = ticks;
     }
@@ -257,9 +249,8 @@ impl Lh5801 {
     pub fn new() -> Self {
         let mut ret = Lh5801::default();
         ret.reset_flag = true;
-        // Encendida desde el principio (el reset pendiente lo volvería a
-        // poner a 1 de todas formas): así `Pc1500::is_powered_on` ya es
-        // cierto en un `Pc1500` recién creado, antes del primer paso.
+        // On from the start (the pending reset would set it anyway): so `Pc1500::is_powered_on` is
+        // already true on a new `Pc1500`, before its first step.
         ret.bf = true;
         ret.fast_halt = true;
         ret.debug_messages = 1200;
@@ -306,18 +297,15 @@ impl Pc1500 {
         self.lh5801.ir0 = false;
         self.lh5801.ir1 = false;
         self.lh5801.ir2 = false;
-        // `timer_state` NO se pone a 0 aquí (antes sí). En el primer
-        // arranque daba igual porque ya vale 0 (`Default`), pero en
-        // cualquier reset posterior (encender con `ON` tras un `OFF` o un
-        // auto-apagado) lo dejaba por debajo de los contadores que se
-        // calculan restándole: `step_previous_state` (más abajo, en
-        // `step_cpu`), y `clock_rate_state`/`last_pulse_state` del
-        // LH5810/PD1990AC. En debug eso es un pánico "attempt to
-        // subtract with overflow" en cuanto se enciende la máquina; en
-        // release (`overflow-checks = false`) un salto enorme del
-        // temporizador. `timer_state` es el reloj de estados del propio
-        // emulador, no un registro de la CPU: el reset real tampoco
-        // detiene el oscilador, así que lo correcto es dejarlo correr.
+        // `timer_state` is NOT reset to 0 here (it used to be). On the first boot it made no
+        // difference, as it is already 0 (`Default`), but on any later reset (switching on with
+        // `ON` after an `OFF` or an automatic power-off) it left it below the counters computed by
+        // subtracting from it: `step_previous_state` (below, in `step_cpu`), and
+        // `clock_rate_state`/`last_pulse_state` of the LH5810/PD1990AC. In debug that is an
+        // "attempt to subtract with overflow" panic as soon as the machine is switched on; in
+        // release (`overflow-checks = false`), a huge jump of the timer. `timer_state` is the
+        // emulator's own clock of states, not a CPU register: the real reset does not stop the
+        // oscillator either, so the right thing is to leave it running.
         self.lh5801.bf = true;
         self.lh5801.tm = 0;
         self.lh5801.pu = false;
@@ -586,12 +574,10 @@ impl Pc1500 {
             self.cpu_internal_reset();
         }
 
-        // Máquina apagada (`OFF`, `FD 4C`): no se ejecuta ninguna
-        // instrucción ni se atiende ninguna interrupción, pero el reloj
-        // de estados sigue avanzando, para que `step_frame()` termine y
-        // el LH5810 y el reloj PD1990AC (alimentado por la batería en la
-        // máquina real) mantengan su ritmo. Solo la tecla `ON` la saca de
-        // aquí (`Pc1500::step` → `Lh5801::power_on`).
+        // Machine off (`OFF`, `FD 4C`): no instruction runs and no interrupt is served, but the
+        // clock of states keeps moving, so that `step_frame()` ends and the LH5810 and the PD1990AC
+        // clock (powered by the battery on the real machine) keep their pace. Only the `ON` key
+        // takes it out of here (`Pc1500::step` → `Lh5801::power_on`).
         if !self.lh5801.bf {
             self.add_state(8);
             return;
@@ -629,15 +615,12 @@ impl Pc1500 {
             && (self.lh5801.p & host_io::TRAP_PAGE_MASK) == host_io::TRAP_PAGE
             && self.host_trap()
         {
-            // `CLOAD`/`CSAVE`/`MERGE`/`CHAIN` en el host (ver
-            // `host_io.rs`): el PC ha llegado a una de las direcciones
-            // trampa de la tabla virtual de $9800 y Rust ha hecho el
-            // trabajo de la instrucción (y dejado el PC en la siguiente
-            // rutina de la ROM). Las dos comparaciones de arriba son lo
-            // único que paga el bucle caliente fuera de esa zona. Si la
-            // trampa no actúa (E/S del host desactivada, o una dirección
-            // de la tabla que no es trampa), se ejecuta la instrucción
-            // que haya ahí: en cada trampa, el `ERROR 27` de reserva.
+            // `CLOAD`/`CSAVE`/`MERGE`/`CHAIN` on the host (see `host_io.rs`): the PC has reached
+            // one of the trap addresses of the virtual table at $9800 and Rust has done the
+            // instruction's work (and left the PC at the next ROM routine). The two comparisons
+            // above are all the hot loop pays outside that area. If the trap does nothing (host I/O
+            // disabled, or an address of the table that is not a trap), the instruction there runs:
+            // in every trap, the fallback `ERROR 27`.
             self.add_state(host_io::TRAP_STATES);
         } else {
             self.instruction();
@@ -651,58 +634,45 @@ impl Pc1500 {
         }
     }
 
-    /// Estados que avanza en un paso de `step_cpu` la CPU parada en
-    /// `HLT`.
+    /// States that a `step_cpu` step moves on with the CPU halted in `HLT`.
     ///
-    /// # Sin avance rápido: de 2 en 2
-    /// Como `PockEmul` (`AddState(2)` con `HLT`), el reloj avanza 2
-    /// estados por paso, y tras cada paso se ejecuta todo lo demás de
-    /// `Pc1500::run` (LH5810, reloj `µPD1990AC`, teclado, interrupciones).
-    /// Pero la ROM pasa casi todo el tiempo ocioso así: en el prompt
-    /// duerme en el `HLT` de `WAIT_4_KB` ($E2A8) hasta la siguiente
-    /// interrupción de temporizador, que con `tm = $057` ($E2A2) tarda 63
-    /// pasos del LFSR × 42 estados = 2646 estados, unas 1300 vueltas de
-    /// ese bucle por cada despertar de la ROM. Medido en release, el
-    /// prompt ocioso iba MÁS LENTO (x58-x132 tiempo real) que un bucle
-    /// activo de la CPU.
+    /// # Without the fast forward: 2 by 2
+    /// As `PockEmul` (`AddState(2)` with `HLT`), the clock moves 2 states per step, and after each
+    /// step all the rest of `Pc1500::run` runs (LH5810, the `µPD1990AC` clock, keyboard,
+    /// interrupts). But the ROM spends almost all its idle time like this: at the prompt it sleeps
+    /// in the `HLT` of `WAIT_4_KB` ($E2A8) until the next timer interrupt, which with `tm = $057`
+    /// ($E2A2) takes 63 LFSR steps × 42 states = 2646 states, some 1300 turns of that loop for each
+    /// wake-up of the ROM. Measured in release, the idle prompt ran SLOWER (x58-x132 real time)
+    /// than a busy CPU loop.
     ///
-    /// # Con avance rápido: hasta el siguiente evento
-    /// Mientras está parada solo pueden pasarle a la CPU tres cosas:
+    /// # With the fast forward: up to the next event
+    /// While halted, only three things can happen to the CPU:
     ///
-    /// 1. La interrupción de temporizador (IR1). El LFSR (`timer_inc`)
-    ///    solo avanza en la frontera de [`TIMER_PERIOD_STATES`] estados
-    ///    que comprueba `step_cpu`, y avanzando de 2 en 2 se llega a ella
-    ///    en el primer paso que la alcanza: a 42 estados del último
-    ///    avance si los que lleva (`since`) son pares, a 43 si son
-    ///    impares. `(43 - since) & !1` da exactamente ese salto.
-    /// 2. IR2 desde el LH5810, que en la PC-1500 solo genera la tecla
-    ///    `ON/BRK` (PB7, ver `Keyboard::on_pulse`). Su pulso lo pone
-    ///    quien pulsa la tecla entre llamada y llamada a
-    ///    `Pc1500::run_for_ticks`, y el `Pc1500::step` que sigue a este
-    ///    paso lo recoge: con un pulso pendiente se avanza solo 2
-    ///    estados, igual que sin avance rápido. (La ROM A04 no habilita
-    ///    esa interrupción: de `MSK` solo toca el bit 0, el de IRQ, en
-    ///    $E020/$E120/$E185/$E217, y el BREAK lo consulta ella misma en
-    ///    cada despertar del temporizador, así que hoy no cambiaría nada;
-    ///    pero un programa en código máquina podría habilitarla.)
-    /// 3. Que acabe el presupuesto de `run_for_ticks` o toque un gancho
-    ///    por frame (`halt_deadline`): de 2 en 2 se llegaría al primer
-    ///    ciclo par de pasos que lo alcanza, `(restantes + 1) & !1`.
+    /// 1. The timer interrupt (IR1). The LFSR (`timer_inc`) only moves at the boundary of
+    ///    [`TIMER_PERIOD_STATES`] states that `step_cpu` checks, and moving 2 by 2 it is reached in
+    ///    the first step that gets to it: 42 states after the last step if the states so far
+    ///    (`since`) are even, 43 if odd. `(43 - since) & !1` gives exactly that jump.
+    /// 2. IR2 from the LH5810, which on the PC-1500 only the `ON/BRK` key generates (PB7, see
+    ///    `Keyboard::on_pulse`). Its pulse is set by whoever presses the key between two calls to
+    ///    `Pc1500::run_for_ticks`, and the `Pc1500::step` after this step picks it up: with a pulse
+    ///    pending it moves only 2 states, as without the fast forward. (The A04 ROM does not enable
+    ///    that interrupt: of `MSK` it only touches bit 0, IRQ's, at $E020/$E120/$E185/$E217, and it
+    ///    checks BREAK itself at each wake-up of the timer, so today it would change nothing; but a
+    ///    machine-code program could enable it.)
+    /// 3. The end of `run_for_ticks`'s budget, or a per-frame hook (`halt_deadline`): moving 2 by 2
+    ///    it would reach the first even number of steps that gets to it, `(remaining + 1) & !1`.
     ///
-    /// Así que se salta directamente al primero de esos eventos: cada
-    /// cosa que puede cambiar el rumbo de la CPU ocurre en el MISMO ciclo
-    /// que sin avance rápido, y los ciclos de cada llamada a
-    /// `run_for_ticks` (frames incluidos) salen idénticos. Los tests lo
-    /// comprueban ejecutando el mismo guion en los dos modos.
+    /// So it jumps straight to the first of those events: everything that can change the CPU's
+    /// course happens in the SAME cycle as without the fast forward, and the cycles of each call to
+    /// `run_for_ticks` (frames included) come out identical. The tests check it by running the same
+    /// script in both modes.
     ///
-    /// Lo único que cambia es que durante el `HLT` los periféricos se
-    /// ponen al día cada ≤42 estados (~32 µs) en vez de cada 2. El reloj
-    /// `µPD1990AC` y los temporizadores del LH5810 trabajan con
-    /// diferencias de `timer_state` (bucles `while` de recuperación), así
-    /// que les da igual el tamaño del paso; la excepción sería el
-    /// desplazamiento serie del LH5810 con los divisores más rápidos (1 y
-    /// 2 estados), que cuenta un bit por paso, pero lo usa la cinta, que
-    /// no duerme en `HLT`. Ver `Pc1500::set_fast_halt` para desactivarlo.
+    /// The only change is that during the `HLT` the peripherals catch up every ≤42 states (~32 µs)
+    /// instead of every 2. The `µPD1990AC` clock and the LH5810's timers work with differences of
+    /// `timer_state` (catch-up `while` loops), so the size of the step makes no difference to them;
+    /// the exception would be the LH5810's serial shift with the fastest dividers (1 and 2 states),
+    /// which counts one bit per step, but it is used by the tape, which does not sleep in `HLT`.
+    /// See `Pc1500::set_fast_halt` to disable it.
     fn halted_states(&self) -> u8 {
         const STEP: usize = 2;
         if !self.lh5801.fast_halt || self.keyboard.on_pulse_pending() {
@@ -1333,14 +1303,11 @@ impl Pc1500 {
                 self.add_state(14);
             }
             0x4c => {
-                // OFF: apaga la máquina (ver la rama `!bf` de
-                // `step_cpu`). La ROM cuenta con que esto corte la
-                // alimentación de verdad: `AUTO_OFF` ($E33F-$E35D) y
-                // `BTN_OFF` ($CD71-$CD81) dejan una firma en $7A10 y
-                // ejecutan `OFF`, y es `RESET` ($E000-$E151), al volver a
-                // encender, quien reanuda según esa firma. Lo que sigue a
-                // los `OFF` en la ROM solo se ejecutaría si la
-                // alimentación no se cortara.
+                // OFF: switches the machine off (see the `!bf` branch of `step_cpu`). The ROM
+                // counts on this really cutting the power: `AUTO_OFF` ($E33F-$E35D) and `BTN_OFF`
+                // ($CD71-$CD81) leave a signature at $7A10 and run `OFF`, and it is `RESET`
+                // ($E000-$E151), when switched on again, that resumes according to that signature.
+                // What follows the `OFF`s in the ROM would only run if the power were not cut.
                 self.lh5801.bf = false;
                 self.add_state(8);
             }

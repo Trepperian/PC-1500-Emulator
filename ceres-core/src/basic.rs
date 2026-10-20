@@ -1,143 +1,127 @@
-//! Programas BASIC desde y hacia el host.
+//! BASIC programs from and to the host.
 //!
-//! El formato de programa en RAM de la PC-1500, un tokenizador y un
-//! detokenizador que leen las palabras clave de las propias tablas de la
-//! ROM, los formatos de archivo del host (texto ASCII, volcado tokenizado
-//! "crudo" y `.BAS` tokenizado con la cabecera de 27 bytes de la CE-158) y
-//! la carga/extracción del programa de la máquina emulada.
+//! The PC-1500's program format in RAM, a tokenizer and a detokenizer that read the keywords from
+//! the ROM's own tables, the host's file formats (ASCII text, "raw" tokenized dump and tokenized
+//! `.BAS` with the CE-158's 27-byte header) and loading/extracting the program of the emulated
+//! machine.
 //!
-//! # El programa en RAM
-//! Cada línea es `[nº hi][nº lo][len][cuerpo ... $0D]`, donde `len` cuenta
-//! el cuerpo INCLUIDO el `$0D` final (la línea 5000 de `mole`: `13 88 07
-//! 22 4D 4F 4C 45 22 0D`). Los números válidos van de 1 a 65279 ($FEFF):
-//! un byte alto $FF es la marca de fin. Las líneas van en orden creciente
-//! y el programa termina con UN byte $FF en la dirección que guarda
-//! `BASPRG_END` ($7867/68). La ROM encuentra el final por ese $FF, no por
-//! el puntero (`LINE_SEARCH_6` $D2FF: `LDA (SRCH_LINE_H)` / `CPI A,$FF`),
-//! y `NEW` lo escribe ($C857 `ORI (X),$FF` y $C859 `BASPRG_END` = la
-//! dirección de ese $FF). El formato no tiene direcciones absolutas (los
-//! destinos de `GOTO` son dígitos ASCII o etiquetas), así que un programa
-//! se puede cargar en cualquier dirección.
+//! # The program in RAM
+//! Each line is `[no. hi][no. lo][len][body ... $0D]`, where `len` counts the body INCLUDING the
+//! final `$0D` (line 5000 of `mole`: `13 88 07 22 4D 4F 4C 45 22 0D`). Valid numbers go from 1 to
+//! 65279 ($FEFF): a high byte $FF is the end mark. The lines go in increasing order and the program
+//! ends with ONE byte $FF at the address that `BASPRG_END` ($7867/68) keeps. The ROM finds the end
+//! by that $FF, not by the pointer (`LINE_SEARCH_6` $D2FF: `LDA (SRCH_LINE_H)` / `CPI A,$FF`), and
+//! `NEW` writes it ($C857 `ORI (X),$FF` and $C859 `BASPRG_END` = the address of that $FF). The
+//! format has no absolute addresses (the targets of `GOTO` are ASCII digits or labels), so a
+//! program can be loaded at any address.
 //!
-//! # Las palabras clave salen de la ROM
-//! No hay ninguna lista de palabras clave escrita a mano para tokenizar:
-//! [`KeywordTable`] interpreta la tabla de la ROM principal ($C000) byte a
-//! byte, y [`Pc1500::basic_keywords`] recorre además, en el MISMO orden
-//! que la rutina `TOK_INBUF` de la ROM, todas las tablas de expansión que
-//! haya en la máquina emulada ($B800, $B000, ..., $8000 con `PV`=0 y luego
-//! con `PV`=1). Así una tabla que se añada al mapa de memoria (p. ej. la
-//! tabla virtual de `CLOAD`/`CSAVE` en $9800) se usa sola, sin tocar este
-//! módulo. Para listar archivos de máquinas reales con CE-150/CE-158, el
-//! detokenizador conoce además los nombres de los tokens de esos
-//! periféricos ([`KeywordTable::peripherals`]).
+//! # The keywords come from the ROM
+//! There is no keyword list written by hand to tokenize: [`KeywordTable`] reads the main ROM's
+//! table ($C000) byte by byte, and [`Pc1500::basic_keywords`] also walks, in the SAME order as the
+//! ROM's `TOK_INBUF` routine, all the expansion tables there are in the emulated machine ($B800,
+//! $B000, ..., $8000 with `PV`=0 and then with `PV`=1). So a table added to the memory map (e.g.
+//! the virtual table of `CLOAD`/`CSAVE` at $9800) is used by itself, without touching this module.
+//! To list files of real machines with a CE-150/CE-158, the detokenizer also knows the names of
+//! those peripherals' tokens ([`KeywordTable::peripherals`]).
 //!
-//! # El tokenizador es la ROM
-//! [`tokenize_body`] es una traducción literal de `TOK_INBUF` ($F957), con
-//! sus rarezas: el apóstrofo se borra en todas partes (incluso dentro de
-//! cadenas), los espacios fuera de cadenas desaparecen, los espacios
-//! DENTRO de una palabra clave se saltan al compararla (`G O T O` es
-//! `GOTO`), las minúsculas nunca se tokenizan, `.` abrevia a la primera
-//! palabra de la tabla que encaje (`P.` = `PRINT`), las palabras clave se
-//! encuentran también dentro de identificadores (`ATOB` = `A` `TO` `B`) y
-//! tras `REM` el resto de la línea se copia tal cual. Se ha comprobado
-//! tecleando en la ROM emulada todas las líneas del corpus de programas
-//! (3596 líneas, 0 diferencias de bytes).
+//! # The tokenizer is the ROM's
+//! [`tokenize_body`] is a literal translation of `TOK_INBUF` ($F957), with its quirks: the
+//! apostrophe is deleted everywhere (even inside strings), spaces outside strings disappear, spaces
+//! INSIDE a keyword are skipped when comparing it (`G O T O` is `GOTO`), lowercase letters are
+//! never tokenized, `.` abbreviates to the first word of the table that fits (`P.` = `PRINT`),
+//! keywords are also found inside identifiers (`ATOB` = `A` `TO` `B`) and after `REM` the rest of
+//! the line is copied as it is. It has been checked by typing on the emulated ROM all the lines of
+//! the corpus of programs (3596 lines, 0 differences of bytes).
 
 use core::{error::Error, fmt, fmt::Write as _, iter};
 use std::{borrow::Cow, fs, path::Path, sync::OnceLock};
 
 use crate::{Pc1500, memory};
 
-// --- Direcciones de la RAM del sistema que usa este módulo -------------
+// --- Addresses of the system RAM that this module uses -------------
 
-/// `RAM_ST_H` ($7863): página de inicio de la RAM, la que encuentra el
-/// sondeo de `RESET` ($E098). Con la CE-161 del emulador, $01.
+/// `RAM_ST_H` ($7863): page where RAM starts, the one the `RESET` probe ($E098) finds. With the
+/// emulator's CE-161, $00.
 pub const RAM_ST_H: u16 = 0x7863;
-/// `RAM_END_H` ($7864): página siguiente al final de la RAM. Con la
-/// CE-161, $48 (la RAM acaba en $47FF).
+/// `RAM_END_H` ($7864): page after the end of RAM. With the CE-161, $48 (RAM ends at $47FF); $58 on
+/// a PC-1500A.
 pub const RAM_END_H: u16 = 0x7864;
-/// `BASPRG_ST` ($7865/66): primera línea del programa BASIC.
+/// `BASPRG_ST` ($7865/66): first line of the BASIC program.
 pub const BASPRG_ST: u16 = 0x7865;
-/// `BASPRG_END` ($7867/68): dirección del $FF que cierra el programa.
+/// `BASPRG_END` ($7867/68): address of the $FF that closes the program.
 pub const BASPRG_END: u16 = 0x7867;
-/// `BASPRG_EDT` ($7869/6A): donde empieza a buscar líneas `LINE_SEARCH`
-/// ($D2E0). Es igual a `BASPRG_ST` salvo tras un `MERGE`.
+/// `BASPRG_EDT` ($7869/6A): where `LINE_SEARCH` ($D2E0) starts looking for lines. It is the same as
+/// `BASPRG_ST` except after a `MERGE`.
 pub const BASPRG_EDT: u16 = 0x7869;
-/// `BREAKPARAM` ($788A): estado de ejecución. Medido: $00 en el prompt,
-/// $50 esperando un `INPUT`, $20 en la pausa de un `PRINT`, $80 tras
-/// `STOP`/BREAK (lo que mira `CONT`, $C8CA `BII (BREAKPARAM),$E0`).
+/// `BREAKPARAM` ($788A): running state. Measured: $00 at the prompt, $50 waiting for an `INPUT`,
+/// $20 in the pause of a `PRINT`, $80 after `STOP`/BREAK (what `CONT` looks at, $C8CA
+/// `BII (BREAKPARAM),$E0`).
 pub const BREAKPARAM: u16 = 0x788A;
-/// `VAR_START` ($7899/9A): base de las variables dimensionadas, que
-/// crecen hacia abajo desde `RAM_END_H`:00 (`DEL_DIM_VAR`, $D091).
+/// `VAR_START` ($7899/9A): base of the dimensioned variables, which grow down from `RAM_END_H`:00
+/// (`DEL_DIM_VAR`, $D091).
 pub const VAR_START: u16 = 0x7899;
-/// `DATA_PTR` ($78BE/BF): puntero de `READ`, `(inicio + 3) | $8000` tras
-/// `INIT_SYS_ADDR_2` ($CFD2-$CFDA).
+/// `DATA_PTR` ($78BE/BF): pointer of `READ`, `(start + 3) | $8000` after `INIT_SYS_ADDR_2`
+/// ($CFD2-$CFDA).
 pub const DATA_PTR: u16 = 0x78BE;
 
-/// Bits de [`BREAKPARAM`] que indican que la ROM NO está en el prompt
-/// sino dentro de un programa (`INPUT` $50, pausa de `PRINT` $20). El
-/// bit 7 ($80, tras `STOP`/BREAK) no cuenta: el prompt tras un `STOP` es
-/// un prompt normal.
+/// Bits of [`BREAKPARAM`] that say the ROM is NOT at the prompt but inside a program (`INPUT` $50,
+/// pause of `PRINT` $20). Bit 7 ($80, after `STOP`/BREAK) does not count: the prompt after a `STOP`
+/// is a normal prompt.
 const BREAKPARAM_BUSY: u8 = 0x70;
 
-/// Byte bajo de la dirección de inicio que pone `NEW0` (`BCMD_NEW_4`
-/// $C840-$C853: `RAM_ST_H`:$C5, justo después del área de teclas
-/// reservadas `RAM_ST_H`:$08-$C4).
+/// Low byte of the start address that `NEW0` sets (`BCMD_NEW_4` $C840-$C853: `RAM_ST_H`:$C5, right
+/// after the area of reserved keys `RAM_ST_H`:$08-$C4).
 const NEW0_START_LOW: u8 = 0xC5;
 
-// --- Bytes y tokens -----------------------------------------------------
+// --- Bytes and tokens -----------------------------------------------------
 
-/// Fin de línea en el búfer de entrada y en el programa.
+/// End of line in the input buffer and in the program.
 const CR: u8 = 0x0D;
-/// Marca de fin de programa (byte alto de "número de línea" $FF).
+/// End of program mark (high byte of "line number" $FF).
 const END_MARK: u8 = 0xFF;
-/// Mayor número de línea válido: $FF como byte alto es la marca de fin.
+/// Highest valid line number: $FF as the high byte is the end mark.
 pub const MAX_LINE_NUMBER: u16 = 0xFEFF;
-/// Firma de una tabla de palabras clave en su primer byte ($C000 = $55).
+/// Signature of a keyword table in its first byte ($C000 = $55).
 const TABLE_SIGNATURE: u8 = 0x55;
-/// Token de `REM`: tras él, el resto de la línea va crudo.
+/// Token of `REM`: after it, the rest of the line goes raw.
 pub const TOKEN_REM: u16 = 0xF1AB;
-/// Token de `PI` (el carácter π del teclado).
+/// Token of `PI` (the keyboard's π character).
 pub const TOKEN_PI: u16 = 0xF15D;
-/// Token de `SQR` (el carácter √ del teclado).
+/// Token of `SQR` (the keyboard's √ character).
 pub const TOKEN_SQR: u16 = 0xF16B;
-/// Cuerpo (con el `$0D`) más largo que se puede editar en la máquina.
+/// Longest body (with the `$0D`) that can be edited on the machine.
 ///
-/// El búfer de entrada es de 80 caracteres y `FIND_NEXT_LINE` ($DF72, `LDI
-/// UL,$4C`) solo busca el `$0D` en 77 bytes, de lo que depende `REM`
-/// ($C676).
+/// The input buffer is 80 characters and `FIND_NEXT_LINE` ($DF72, `LDI UL,$4C`) only looks for the
+/// `$0D` in 77 bytes, which `REM` ($C676) depends on.
 pub const MAX_EDITABLE_BODY: usize = 79;
-/// Cabecera de un archivo `.BAS` de la CE-158: 27 bytes.
+/// Header of a CE-158 `.BAS` file: 27 bytes.
 pub const CE158_HEADER_LEN: usize = 27;
-/// Firma de la cabecera CE-158 (bytes 0-4): `$01 "@COM"`.
+/// Signature of the CE-158 header (bytes 0-4): `$01 "@COM"`.
 const CE158_MAGIC: [u8; 5] = [0x01, b'@', b'C', b'O', b'M'];
-/// Bytes del nombre en la cabecera CE-158 (bytes 5-20, rellenos con NUL).
+/// Bytes of the name in the CE-158 header (bytes 5-20, padded with NUL).
 const CE158_NAME_LEN: usize = 16;
 
-// --- Errores y avisos ---------------------------------------------------
+// --- Errors and warnings ---------------------------------------------------
 
-/// Por qué no se pudo interpretar un programa o una tabla de palabras
-/// clave.
+/// Why a program or a keyword table could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BasicError {
-    /// La tabla de palabras clave en `base` no tiene el formato de la ROM.
+    /// The keyword table at `base` does not have the ROM's format.
     BadKeywordTable { base: u16, reason: &'static str },
-    /// Un token (byte >= $E0) dentro de una cadena: el `ERROR 28` de
-    /// `TOK_INBUF` ($F9A5, $FA2D `LDI UH,$1C`). `line` es `None` si se
-    /// tokenizó un cuerpo suelto.
+    /// A token (byte >= $E0) inside a string: `TOK_INBUF`'s `ERROR 28` ($F9A5, $FA2D `LDI UH,$1C`).
+    /// `line` is `None` if a single body was tokenized.
     TokenInString { line: Option<u16> },
-    /// Un carácter del texto que no existe en la PC-1500 (columna desde
-    /// 1, en caracteres de la línea de texto).
+    /// A character of the text that does not exist on the PC-1500 (column from 1, in characters of
+    /// the text line).
     BadCharacter { line: u16, column: usize, ch: char },
-    /// Un número de línea fuera de 1..=65279 (`text_line` es la línea del
-    /// archivo de texto, desde 1).
+    /// A line number outside 1..=65279 (`text_line` is the line of the text file, from 1).
     BadLineNumber { text_line: usize, number: u64 },
-    /// Una línea cuyo cuerpo tokenizado no cabe en el byte de longitud
-    /// (más de 254 bytes más el `$0D`).
+    /// A line whose tokenized body does not fit in the length byte (more than 254 bytes plus the
+    /// `$0D`).
     LineTooLong { line: u16, len: usize },
-    /// Un programa tokenizado mal formado en `offset`.
+    /// A badly formed tokenized program at `offset`.
     BadTokenized { offset: usize, reason: &'static str },
-    /// Una cabecera CE-158 que no lo es.
+    /// A CE-158 header that is not one.
     BadCe158Header(&'static str),
 }
 
@@ -145,124 +129,122 @@ impl fmt::Display for BasicError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BadKeywordTable { base, reason } => {
-                write!(f, "tabla de palabras clave en ${base:04X} no v\u{e1}lida: {reason}")
+                write!(f, "keyword table at ${base:04X} not valid: {reason}")
             }
             Self::TokenInString { line: Some(line) } => {
-                write!(f, "l\u{ed}nea {line}: token dentro de una cadena (ERROR 28)")
+                write!(f, "line {line}: token inside a string (ERROR 28)")
             }
             Self::TokenInString { line: None } => {
-                f.write_str("token dentro de una cadena (ERROR 28)")
+                f.write_str("token inside a string (ERROR 28)")
             }
             Self::BadCharacter { line, column, ch } => write!(
                 f,
-                "l\u{ed}nea {line}, columna {column}: el car\u{e1}cter '{ch}' no existe en la PC-1500 \
-                 (usar \\xNN para un byte crudo)"
+                "line {line}, column {column}: the character '{ch}' does not exist on the PC-1500 \
+                 (use \\xNN for a raw byte)"
             ),
             Self::BadLineNumber { text_line, number } => write!(
                 f,
-                "l\u{ed}nea {text_line} del texto: n\u{fa}mero de l\u{ed}nea {number} fuera de 1..={MAX_LINE_NUMBER}"
+                "line {text_line} of the text: line number {number} outside 1..={MAX_LINE_NUMBER}"
             ),
             Self::LineTooLong { line, len } => write!(
                 f,
-                "l\u{ed}nea {line}: {len} bytes tokenizados, m\u{e1}s de los 255 que admite una l\u{ed}nea"
+                "line {line}: {len} tokenized bytes, more than the 255 a line takes"
             ),
             Self::BadTokenized { offset, reason } => {
-                write!(f, "programa tokenizado no v\u{e1}lido en el byte {offset}: {reason}")
+                write!(f, "tokenized program not valid at byte {offset}: {reason}")
             }
-            Self::BadCe158Header(reason) => write!(f, "cabecera CE-158 no v\u{e1}lida: {reason}"),
+            Self::BadCe158Header(reason) => write!(f, "CE-158 header not valid: {reason}"),
         }
     }
 }
 
 impl Error for BasicError {}
 
-/// Algo raro pero no fatal encontrado al interpretar un programa.
+/// Something odd but not fatal found while reading a program.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warning {
-    /// Número de línea BASIC, si el aviso es de una línea concreta.
+    /// BASIC line number, if the warning is about a specific line.
     pub line: Option<u16>,
     pub kind: WarningKind,
 }
 
-/// Ver [`Warning`].
+/// See [`Warning`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WarningKind {
-    /// Líneas de texto que no empiezan por un número (comentarios `'`
-    /// de cabecera del corpus...) y se han saltado. Las vacías no cuentan.
+    /// Text lines that do not start with a number (`'` header comments of the corpus...) and have
+    /// been skipped. Empty ones do not count.
     SkippedNonProgramLines(usize),
-    /// El número de línea ya estaba: gana la última, como en el editor.
+    /// The line number was already there: the last one wins, as in the editor.
     DuplicateLine,
-    /// La línea tenía apóstrofos fuera de `REM`: la ROM los borra
-    /// siempre, también dentro de cadenas ($F962 `CPI A,$27`).
+    /// The line had apostrophes outside `REM`: the ROM always deletes them, also inside strings
+    /// ($F962 `CPI A,$27`).
     ApostropheDeleted,
-    /// Cuerpo (con el `$0D`) de más de [`MAX_EDITABLE_BODY`] bytes: se
-    /// carga y se ejecuta, pero no se puede editar en la máquina.
+    /// Body (with the `$0D`) of more than [`MAX_EDITABLE_BODY`] bytes: it loads and runs, but it
+    /// cannot be edited on the machine.
     BodyLongerThan79 { len: usize },
-    /// Las líneas de un archivo tokenizado no van en orden creciente (se
-    /// cargan tal cual; la ROM no encontrará bien algunas).
+    /// The lines of a tokenized file are not in increasing order (they are loaded as they are; the
+    /// ROM will not find some of them properly).
     UnsortedLines,
-    /// La cabecera CE-158 anuncia más bytes de los que trae el archivo.
+    /// The CE-158 header announces more bytes than the file has.
     Ce158Truncated { declared: usize, present: usize },
 }
 
 impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(line) = self.line {
-            write!(f, "l\u{ed}nea {line}: ")?;
+            write!(f, "line {line}: ")?;
         }
         match &self.kind {
             WarningKind::SkippedNonProgramLines(n) => {
-                write!(f, "{n} l\u{ed}neas de texto sin n\u{fa}mero ignoradas")
+                write!(f, "{n} text lines without a number ignored")
             }
-            WarningKind::DuplicateLine => f.write_str("n\u{fa}mero repetido, gana la \u{fa}ltima"),
+            WarningKind::DuplicateLine => f.write_str("repeated number, the last one wins"),
             WarningKind::ApostropheDeleted => {
-                f.write_str("la PC-1500 borra los ap\u{f3}strofos (') fuera de REM")
+                f.write_str("the PC-1500 deletes the apostrophes (') outside REM")
             }
             WarningKind::BodyLongerThan79 { len } => write!(
                 f,
-                "{len} bytes, m\u{e1}s de {MAX_EDITABLE_BODY}: no se podr\u{e1} editar en la m\u{e1}quina"
+                "{len} bytes, more than {MAX_EDITABLE_BODY}: it cannot be edited on the machine"
             ),
-            WarningKind::UnsortedLines => f.write_str("l\u{ed}neas fuera de orden"),
+            WarningKind::UnsortedLines => f.write_str("lines out of order"),
             WarningKind::Ce158Truncated { declared, present } => write!(
                 f,
-                "la cabecera CE-158 anuncia {declared} bytes y el archivo trae {present}"
+                "the CE-158 header announces {declared} bytes and the file has {present}"
             ),
         }
     }
 }
 
-// --- Tablas de palabras clave -------------------------------------------
+// --- Keyword tables -------------------------------------------
 
-/// Una entrada de una tabla de palabras clave de la ROM.
+/// An entry of one of the ROM's keyword tables.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Keyword {
-    /// Dirección de su byte de control (0 en las tablas sintéticas).
+    /// Address of its control byte (0 in the synthetic tables).
     pub addr: u16,
-    /// El texto de la palabra clave (`b"PRINT"`).
+    /// The keyword's text (`b"PRINT"`).
     pub text: Vec<u8>,
-    /// El token de 2 bytes ($F097 para `PRINT`).
+    /// The 2-byte token ($F097 for `PRINT`).
     pub token: u16,
-    /// Dirección de la rutina que la ejecuta (0 en las sintéticas).
+    /// Address of the routine that runs it (0 in the synthetic ones).
     pub vector: u16,
-    /// Bit 4 de sus atributos: es la última palabra de su letra, y si no
-    /// encaja el tokenizador pasa a la tabla siguiente (`TOK_INBUF_25`
-    /// $FA36-$FA3E: `ANI A,$10` / `BZS TOK_INBUF_16`).
+    /// Bit 4 of its attributes: it is the last word of its letter, and if it does not fit the
+    /// tokenizer moves to the next table (`TOK_INBUF_25` $FA36-$FA3E: `ANI A,$10` /
+    /// `BZS TOK_INBUF_16`).
     pub last_of_letter: bool,
 }
 
-/// Una tabla de palabras clave, tal como la recorre la ROM.
+/// A keyword table, as the ROM walks it.
 ///
-/// # Formato (comprobado en el `.lst` de la A04)
-/// - `base + $00` = $55 (firma).
-/// - `base + $20 + 2·(letra-'A')`: puntero big-endian al SEGUNDO carácter
-///   de la primera palabra de esa letra, o $0000 si no hay ninguna (en la
-///   ROM principal H, J, K, Q, X, Y y Z). La ROM solo mira el byte alto.
-/// - Desde `base + $54`, entradas `[ctl][texto][token hi][token lo]
-///   [vector hi][vector lo]`. El nibble bajo de `ctl` es la longitud del
-///   texto; el alto son los atributos de la entrada ANTERIOR (macro
-///   `CNIB` de `PC-1500_Macros.lib`), así que los de la entrada k están
-///   en el `ctl` de la k+1.
-/// - Termina en un `ctl` con nibble bajo 0 ($C34E = $D0 en la A04).
+/// # Format (checked on the A04's `.lst`)
+/// - `base + $00` = $55 (signature).
+/// - `base + $20 + 2·(letter-'A')`: big-endian pointer to the SECOND character of the first word of
+///   that letter, or $0000 if there is none (in the main ROM H, J, K, Q, X, Y and Z). The ROM only
+///   looks at the high byte.
+/// - From `base + $54`, entries `[ctl][text][token hi][token lo] [vector hi][vector lo]`. The low
+///   nibble of `ctl` is the length of the text; the high one are the attributes of the PREVIOUS
+///   entry (macro `CNIB` of `PC-1500_Macros.lib`), so those of entry k are in the `ctl` of k+1.
+/// - It ends with a `ctl` with low nibble 0 ($C34E = $D0 in the A04).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeywordTable {
     base: u16,
@@ -272,10 +254,9 @@ pub struct KeywordTable {
     end: u16,
 }
 
-/// Tokens de los periféricos CE-150 (impresora/casete) y CE-158 (RS-232/
-/// paralelo), para LISTAR programas de máquinas reales que los usen. Son
-/// los de las tablas de esas ROMs (CE-150 $B800, CE-158 $8000/$8800 con
-/// `PV`=1), que el emulador no tiene.
+/// Tokens of the CE-150 (printer/cassette) and CE-158 (RS-232/parallel) peripherals, to LIST
+/// programs of real machines that use them. They are those of the tables of those ROMs (CE-150
+/// $B800, CE-158 $8000/$8800 with `PV`=1), which the emulator does not have.
 const PERIPHERAL_KEYWORDS: [(&str, u16); 38] = [
     ("LPRINT", 0xF0B9),
     ("LLIST", 0xF0B8),
@@ -317,19 +298,19 @@ const PERIPHERAL_KEYWORDS: [(&str, u16); 38] = [
     ("RINKEY$", 0xE85A),
 ];
 
-/// Dirección de la tabla de la ROM principal.
+/// Address of the main ROM's table.
 pub const MAIN_TABLE_BASE: u16 = 0xC000;
-/// Primera entrada de una tabla (`base + $54`).
+/// First entry of a table (`base + $54`).
 const FIRST_ENTRY_OFFSET: u16 = 0x54;
-/// Punteros por letra (`base + $20`).
+/// Pointers by letter (`base + $20`).
 const LETTER_POINTERS_OFFSET: u16 = 0x20;
-/// Tope de entradas al recorrer una tabla: una tabla rota (o memoria sin
-/// tabla) no puede hacer que el recorrido no termine.
+/// Limit of entries when walking a table: a broken table (or memory with no table) cannot keep the
+/// walk from ending.
 const MAX_TABLE_ENTRIES: usize = 512;
 
 impl KeywordTable {
-    /// Interpreta la tabla en `table_base` de una imagen de ROM `rom` que
-    /// empieza en `rom_base`. Fuera de la imagen se lee $FF.
+    /// Reads the table at `table_base` of a ROM image `rom` that starts at `rom_base`. Outside the
+    /// image, $FF is read.
     pub fn parse(rom: &[u8], rom_base: u16, table_base: u16) -> Result<Self, BasicError> {
         Self::parse_with(table_base, false, |addr| {
             rom.get(usize::from(addr.wrapping_sub(rom_base)))
@@ -338,19 +319,18 @@ impl KeywordTable {
         })
     }
 
-    /// Interpreta la tabla en `base` leyendo cada byte con `read` (p. ej.
-    /// de la memoria emulada con el `PV` que toque, ver
-    /// [`Pc1500::basic_keywords`]). `pv` solo se guarda, para saber de
-    /// dónde salió.
+    /// Reads the table at `base` reading each byte with `read` (e.g. from the emulated memory with
+    /// whichever `PV` is due, see [`Pc1500::basic_keywords`]). `pv` is only kept, to know where it
+    /// came from.
     pub fn parse_with<F: Fn(u16) -> u8>(base: u16, pv: bool, read: F) -> Result<Self, BasicError> {
         let bad = |reason| BasicError::BadKeywordTable { base, reason };
         if read(base) != TABLE_SIGNATURE {
-            return Err(bad("falta la firma $55"));
+            return Err(bad("the signature $55 is missing"));
         }
         let mut entries: Vec<Keyword> = Vec::new();
         let mut addr = base.wrapping_add(FIRST_ENTRY_OFFSET);
-        // Atributos de cada entrada = nibble alto del `ctl` de la
-        // siguiente (o del terminador).
+        // Attributes of each entry = high nibble of the `ctl` of the next one (or of the
+        // terminator).
         let mut next_ctls = Vec::new();
         loop {
             let ctl = read(addr);
@@ -362,23 +342,23 @@ impl KeywordTable {
                 break;
             }
             if entries.len() >= MAX_TABLE_ENTRIES {
-                return Err(bad("no termina"));
+                return Err(bad("it does not end"));
             }
             let at = |offset: u8| read(addr.wrapping_add(u16::from(offset)));
             let text: Vec<u8> = (1..=len).map(at).collect();
             if text.iter().any(|&b| b >= 0xE0) {
-                return Err(bad("texto de palabra clave con bytes >= $E0"));
+                return Err(bad("keyword text with bytes >= $E0"));
             }
             let token = u16::from(at(len + 1)) << 8 | u16::from(at(len + 2));
             let vector = u16::from(at(len + 3)) << 8 | u16::from(at(len + 4));
             if token < 0xE100 {
-                // El tokenizador reconoce el final del texto por un byte
-                // > $E0 ($F9F9 `CPI A,$E0`, `CIN` del '.' en $F9EF).
-                return Err(bad("token menor que $E100"));
+                // The tokenizer recognizes the end of the text by a byte > $E0 ($F9F9 `CPI A,$E0`,
+                // `CIN` of the '.' at $F9EF).
+                return Err(bad("token below $E100"));
             }
             entries.push(Keyword { addr, text, token, vector, last_of_letter: false });
             let Some(next) = addr.checked_add(5 + u16::from(len)) else {
-                return Err(bad("se sale de la memoria"));
+                return Err(bad("it goes beyond the memory"));
             };
             addr = next;
         }
@@ -396,7 +376,7 @@ impl KeywordTable {
             let ptr = u16::from(hi) << 8 | u16::from(read(ptr_addr.wrapping_add(1)));
             let entry_addr = ptr.wrapping_sub(2);
             let Some(index) = entries.iter().position(|e| e.addr == entry_addr) else {
-                return Err(bad("un puntero de letra no apunta a ninguna entrada"));
+                return Err(bad("a letter pointer points at no entry"));
             };
             *slot = Some(index);
         }
@@ -404,8 +384,7 @@ impl KeywordTable {
         Ok(Self { base, pv, entries, first_by_letter, end: addr })
     }
 
-    /// La tabla de la ROM principal A04 ($C000), interpretada una sola vez
-    /// de la imagen de ROM del emulador.
+    /// The table of the A04 main ROM ($C000), read only once from the emulator's ROM image.
     pub fn main_rom() -> &'static Self {
         static TABLE: OnceLock<KeywordTable> = OnceLock::new();
         TABLE.get_or_init(|| {
@@ -414,17 +393,15 @@ impl KeywordTable {
         })
     }
 
-    /// Los tokens de los periféricos CE-150/CE-158 (ver
-    /// `PERIPHERAL_KEYWORDS`) como una tabla sintética: por defecto solo
-    /// sirven para detokenizar (ver [`Keywords`]). Dentro de cada letra
-    /// van en el orden de la lista; `addr` y `vector` son 0.
+    /// The tokens of the CE-150/CE-158 peripherals (see `PERIPHERAL_KEYWORDS`) as a synthetic
+    /// table: by default they are only used to detokenize (see [`Keywords`]). Within each letter
+    /// they go in the order of the list; `addr` and `vector` are 0.
     pub fn peripherals() -> &'static Self {
         static TABLE: OnceLock<KeywordTable> = OnceLock::new();
         TABLE.get_or_init(|| Self::from_list(&PERIPHERAL_KEYWORDS))
     }
 
-    /// Tabla sintética a partir de pares (texto, token), agrupados por su
-    /// primera letra en el orden dado.
+    /// Synthetic table from pairs (text, token), grouped by their first letter in the order given.
     fn from_list(list: &[(&str, u16)]) -> Self {
         let mut entries: Vec<Keyword> = Vec::new();
         let mut first_by_letter = [None; 26];
@@ -455,39 +432,39 @@ impl KeywordTable {
         Self { base, pv: false, entries: Vec::new(), first_by_letter: [None; 26], end: base }
     }
 
-    /// Las entradas, en el orden de la tabla.
+    /// The entries, in the order of the table.
     #[must_use]
     pub fn entries(&self) -> &[Keyword] {
         &self.entries
     }
 
-    /// Índice de la primera entrada de `letter` (`b'A'..=b'Z'`).
+    /// Index of the first entry of `letter` (`b'A'..=b'Z'`).
     #[must_use]
     pub fn first_for_letter(&self, letter: u8) -> Option<usize> {
         let index = usize::from(letter.checked_sub(b'A')?);
         *self.first_by_letter.get(index)?
     }
 
-    /// Dirección de la tabla (0 en las sintéticas).
+    /// Address of the table (0 in the synthetic ones).
     #[must_use]
     pub const fn base(&self) -> u16 {
         self.base
     }
 
-    /// `PV` con el que se leyó la tabla.
+    /// `PV` with which the table was read.
     #[must_use]
     pub const fn pv(&self) -> bool {
         self.pv
     }
 
-    /// Dirección del byte terminador (nibble bajo 0).
+    /// Address of the terminator byte (low nibble 0).
     #[must_use]
     pub const fn end(&self) -> u16 {
         self.end
     }
 
-    /// El texto de `token`: la primera entrada que lo tenga, como el
-    /// recorrido de `LIST` (`TOK_PROCESS_5/6` $FAB7-$FAEF).
+    /// The text of `token`: the first entry that has it, as `LIST`'s walk does (`TOK_PROCESS_5/6`
+    /// $FAB7-$FAEF).
     #[must_use]
     pub fn name(&self, token: u16) -> Option<&[u8]> {
         self.entries
@@ -497,13 +474,11 @@ impl KeywordTable {
     }
 }
 
-/// El conjunto de tablas con que se tokeniza (en orden de búsqueda) y se
-/// detokeniza.
+/// The set of tables with which it tokenizes (in search order) and detokenizes.
 ///
-/// Para tokenizar solo se usan las tablas de búsqueda; para detokenizar,
-/// estas y luego los nombres de los periféricos
-/// ([`KeywordTable::peripherals`]), que la máquina emulada no tiene pero
-/// los archivos de máquinas reales sí pueden traer.
+/// To tokenize only the search tables are used; to detokenize, these and then the names of the
+/// peripherals ([`KeywordTable::peripherals`]), which the emulated machine does not have but files
+/// of real machines may bring.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Keywords {
     search: Vec<KeywordTable>,
@@ -511,24 +486,22 @@ pub struct Keywords {
 }
 
 impl Keywords {
-    /// Solo la tabla de la ROM principal: lo mismo que hace la ROM de un
-    /// emulador sin nada mapeado en $8000-$BFFF. Para la máquina emulada
-    /// tal cual está, mejor [`Pc1500::basic_keywords`].
+    /// Only the main ROM's table: the same as the ROM does on an emulator with nothing mapped at
+    /// $8000-$BFFF. For the emulated machine as it is, better [`Pc1500::basic_keywords`].
     #[must_use]
     pub fn main_rom() -> Self {
         Self::from_tables(vec![KeywordTable::main_rom().clone()])
     }
 
-    /// Las tablas dadas, en el orden en que las buscará el tokenizador.
+    /// The tables given, in the order the tokenizer will search them.
     #[must_use]
     pub const fn from_tables(search: Vec<KeywordTable>) -> Self {
         Self { search, peripherals_searched: false }
     }
 
-    /// Añade los tokens de los periféricos CE-150/CE-158 también al
-    /// TOKENIZAR (después de las demás tablas), para preparar archivos
-    /// para una máquina real que los tenga. No es lo que haría la ROM
-    /// emulada, que los dejaría como letras sueltas.
+    /// Adds the tokens of the CE-150/CE-158 peripherals also when TOKENIZING (after the other
+    /// tables), to prepare files for a real machine that has them. It is not what the emulated ROM
+    /// would do, which would leave them as single letters.
     #[must_use]
     pub fn with_peripherals(mut self) -> Self {
         if !self.peripherals_searched {
@@ -538,14 +511,14 @@ impl Keywords {
         self
     }
 
-    /// Las tablas de búsqueda, en orden.
+    /// The search tables, in order.
     #[must_use]
     pub fn tables(&self) -> &[KeywordTable] {
         &self.search
     }
 
-    /// El texto de `token` en la primera tabla que lo tenga (las de
-    /// búsqueda y luego las de los periféricos).
+    /// The text of `token` in the first table that has it (the search ones and then those of the
+    /// peripherals).
     #[must_use]
     pub fn name(&self, token: u16) -> Option<&[u8]> {
         self.search
@@ -554,7 +527,7 @@ impl Keywords {
             .or_else(|| KeywordTable::peripherals().name(token))
     }
 
-    /// [`tokenize_body`] con estas tablas.
+    /// [`tokenize_body`] with these tables.
     pub fn tokenize_body(&self, src: &[u8]) -> Result<Vec<u8>, BasicError> {
         tokenize_body(src, &self.search)
     }
@@ -568,38 +541,34 @@ impl Default for Keywords {
 
 // --- Tokenizador (TOK_INBUF, $F957) --------------------------------------
 
-/// Resultado interno del tokenizador: el cuerpo y lo que conviene avisar.
+/// Internal result of the tokenizer: the body and what is worth warning about.
 struct Tokenized {
     body: Vec<u8>,
     apostrophes_deleted: bool,
 }
 
-/// Tokeniza el cuerpo de una línea exactamente como `TOK_INBUF` ($F957).
+/// Tokenizes the body of a line exactly as `TOK_INBUF` ($F957).
 ///
-/// `src` es lo que va tras el número de línea, sin `$0D`; las palabras
-/// clave se buscan en `tables` por orden. Leer más allá del final da
-/// `$0D`, como el búfer de entrada de la ROM.
+/// `src` is what comes after the line number, without `$0D`; the keywords are looked for in
+/// `tables` in order. Reading past the end gives `$0D`, as the ROM's input buffer does.
 ///
-/// Las reglas, en el orden de la ROM:
-/// 1. `'` ($27) se salta siempre ($F962), también en cadenas.
-/// 2. `$0D` termina la línea.
-/// 3. `"` cambia el estado "dentro de cadena" y se copia ($F96E).
-/// 4. Dentro de una cadena, un byte >= $E0 es el `ERROR 28` ($F9A5) y lo
-///    demás se copia tal cual.
-/// 5. Fuera, el espacio se descarta ($F9AB).
-/// 6. Lo que esté por debajo de `A` o en $5B..$DF (minúsculas incluidas)
-///    se copia ($F9AF/$F9B3/$F9B7).
-/// 7. Un byte >= $E0 es un token ya presente: se copian 2 bytes.
-/// 8. Una letra `A`-`Z` busca una palabra clave: tabla por tabla, desde
-///    la primera entrada de su letra, comparando el resto del texto con
-///    lo que sigue en la entrada y saltando ahí espacios y apóstrofos
-///    ($F9E1/$F9E5). Un `.` acepta la entrada actual ($F9E9). Si no
-///    encaja, la entrada siguiente, salvo si era la última de su letra,
-///    que pasa a la tabla siguiente. Si no hay ninguna, la letra se copia
-///    y se sigue por el carácter siguiente: por eso hay palabras clave
-///    dentro de los identificadores.
-/// 9. El token se escribe big-endian; si es `REM` ($F1AB), el resto de la
-///    línea se copia crudo ($FA0D-$FA1B).
+/// The rules, in the ROM's order:
+/// 1. `'` ($27) is always skipped ($F962), also in strings.
+/// 2. `$0D` ends the line.
+/// 3. `"` toggles the "inside a string" state and is copied ($F96E).
+/// 4. Inside a string, a byte >= $E0 is `ERROR 28` ($F9A5) and the rest is copied as it is.
+/// 5. Outside, the space is dropped ($F9AB).
+/// 6. Whatever is below `A` or in $5B..$DF (lowercase letters included) is copied
+///    ($F9AF/$F9B3/$F9B7).
+/// 7. A byte >= $E0 is a token already present: 2 bytes are copied.
+/// 8. A letter `A`-`Z` looks for a keyword: table by table, from the first entry of its letter,
+///    comparing the rest of the text with what follows in the entry and skipping spaces and
+///    apostrophes there ($F9E1/$F9E5). A `.` accepts the current entry ($F9E9). If it does not fit,
+///    the next entry, unless it was the last of its letter, which moves to the next table. If there
+///    is none, the letter is copied and it goes on with the next character: that is why there are
+///    keywords inside identifiers.
+/// 9. The token is written big-endian; if it is `REM` ($F1AB), the rest of the line is copied raw
+///    ($FA0D-$FA1B).
 pub fn tokenize_body(src: &[u8], tables: &[KeywordTable]) -> Result<Vec<u8>, BasicError> {
     tokenize(src, tables).map(|t| t.body)
 }
@@ -609,8 +578,7 @@ fn tokenize(src: &[u8], tables: &[KeywordTable]) -> Result<Tokenized, BasicError
     let mut out = Vec::with_capacity(src.len());
     let mut y = 0;
     let mut in_string = false;
-    // Hasta dónde llega lo tokenizado (el resto, tras `REM`, va crudo):
-    // para el aviso de apóstrofos.
+    // How far the tokenized part goes (the rest, after `REM`, is raw): for the apostrophes warning.
     let mut raw_from = None;
     loop {
         let a = at(y);
@@ -637,8 +605,8 @@ fn tokenize(src: &[u8], tables: &[KeywordTable]) -> Result<Tokenized, BasicError
             continue;
         }
         let token = if a >= 0xE0 {
-            // Token ya presente: los 2 bytes tal cual (`LIN Y` del byte
-            // bajo aunque sea el `$0D`, como la ROM).
+            // Token already present: the 2 bytes as they are (`LIN Y` of the low byte even if it is
+            // the `$0D`, as the ROM).
             let low = at(y);
             y += 1;
             u16::from(a) << 8 | u16::from(low)
@@ -668,8 +636,8 @@ fn tokenize(src: &[u8], tables: &[KeywordTable]) -> Result<Tokenized, BasicError
     Ok(Tokenized { body: out, apostrophes_deleted: tokenized_part.contains(&b'\'') })
 }
 
-/// La búsqueda de la regla 8 de [`tokenize_body`]: el token y por dónde
-/// seguir en `src`, o `None`. `y` apunta al carácter que sigue a la letra.
+/// The search of rule 8 of [`tokenize_body`]: the token and where to go on in `src`, or `None`. `y`
+/// points at the character after the letter.
 fn find_keyword(src: &[u8], y: usize, letter: u8, tables: &[KeywordTable]) -> Option<(u16, usize)> {
     let at = |i: usize| src.get(i).copied().unwrap_or(CR);
     for table in tables {
@@ -677,8 +645,8 @@ fn find_keyword(src: &[u8], y: usize, letter: u8, tables: &[KeywordTable]) -> Op
             continue;
         };
         while let Some(entry) = table.entries.get(index) {
-            // La comparación empieza en el SEGUNDO carácter del texto (a
-            // donde apunta el puntero de la letra).
+            // The comparison starts at the SECOND character of the text (where the letter's pointer
+            // points).
             let mut yy = y;
             let mut xi = 1;
             let matched = loop {
@@ -710,21 +678,21 @@ fn find_keyword(src: &[u8], y: usize, letter: u8, tables: &[KeywordTable]) -> Op
     None
 }
 
-// --- El programa ----------------------------------------------------------
+// --- The program ----------------------------------------------------------
 
-/// Una línea de programa: número y cuerpo tokenizado SIN el `$0D`.
+/// A program line: number and tokenized body WITHOUT the `$0D`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgramLine {
     pub number: u16,
     pub body: Vec<u8>,
 }
 
-/// Fin de línea al escribir texto.
+/// End of line when writing text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Eol {
-    /// `\r\n`, la convención de los `.bas` del corpus (y de `.txt`).
+    /// `\r\n`, the convention of the corpus's `.bas` files (and of `.txt`).
     CrLf,
-    /// `\r`, la de los `.ASC` de la CE-158(X).
+    /// `\r`, that of the CE-158(X)'s `.ASC` files.
     Cr,
     /// `\n`.
     Lf,
@@ -740,18 +708,17 @@ impl Eol {
     }
 }
 
-/// Opciones del texto ASCII.
+/// Options of the ASCII text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AsciiOptions {
-    /// Formato de `LIST` (lo predeterminado), en lectura y escritura:
-    /// - Al leer se quita un `:` justo tras el número (el LCD muestra
-    ///   `10:PRINT`) y, si tras `REM` hay dos espacios, uno (el LCD y
-    ///   este escritor ponen un espacio tras cada palabra clave).
-    /// - Al escribir, `REM` va seguido de un espacio si el resto de la
-    ///   línea empieza por espacio (`REM  * JACKPOT*`, como el LCD).
+    /// `LIST` format (the default), in reading and writing:
+    /// - When reading, a `:` right after the number is removed (the LCD shows `10:PRINT`) and, if
+    ///   two spaces follow `REM`, one is (the LCD and this writer put a space after each keyword).
+    /// - When writing, `REM` is followed by a space if the rest of the line starts with a space
+    ///   (`REM  * JACKPOT*`, as the LCD).
     ///
-    /// Con `false` el texto se toma tal cual se teclearía en la máquina
-    /// (fiel a la ROM byte a byte).
+    /// With `false` the text is taken as it would be typed on the machine (faithful to the ROM byte
+    /// by byte).
     pub list_format: bool,
 }
 
@@ -761,55 +728,52 @@ impl Default for AsciiOptions {
     }
 }
 
-/// La cabecera de 27 bytes de un `.BAS` tokenizado de la CE-158.
+/// The 27-byte header of a CE-158 tokenized `.BAS`.
 ///
-/// `$01 "@COM"`, nombre (16 bytes, relleno con NUL), dirección de inicio,
-/// longitud − 1 y dirección final (la del `$FF`), todo big-endian. Es lo
-/// que escribe `CSAVE` en la ROM de la CE-158: `SUB_9CEC` envía los 27
-/// bytes de `OUT_BUF` ($7B60-$7B7A), con el inicio en +$15 (de
-/// `PRGST2XREG`, `STATUS_1M2_UREG` $DFFA de la A04: X = `BASPRG_ST`, U =
-/// `BASPRG_END` − 1 − X), la longitud − 1 en +$17 y `BASPRG_END` en +$19
-/// ($9980). Tras ella van los bytes del programa SIN el `$FF`: en los
-/// archivos de Jeff Birt (`BATHY.BAS`, 933 = 27 + 906 bytes, longitud − 1
-/// = $0389; `DUN`, $1CBD) y en el volcado de RAM `BASPRG_ST..BASPRG_END`.
+/// `$01 "@COM"`, name (16 bytes, padded with NUL), start address, length − 1 and end address (that
+/// of the `$FF`), all big-endian. It is what `CSAVE` writes in the CE-158's ROM: `SUB_9CEC` sends
+/// the 27 bytes of `OUT_BUF` ($7B60-$7B7A), with the start at +$15 (from `PRGST2XREG`,
+/// `STATUS_1M2_UREG` $DFFA of the A04: X = `BASPRG_ST`, U = `BASPRG_END` − 1 − X), the length − 1
+/// at +$17 and `BASPRG_END` at +$19 ($9980). After it come the bytes of the program WITHOUT the
+/// `$FF`: in Jeff Birt's files (`BATHY.BAS`, 933 = 27 + 906 bytes, length − 1 = $0389; `DUN`,
+/// $1CBD) and in the RAM dump `BASPRG_ST..BASPRG_END`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ce158Header {
-    /// Nombre, sin el relleno de NUL.
+    /// Name, without the NUL padding.
     pub name: Vec<u8>,
     pub start: u16,
     pub size_minus_one: u16,
     pub end: u16,
 }
 
-/// Un programa BASIC tokenizado: líneas con número y cuerpo.
+/// A tokenized BASIC program: lines with number and body.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Program {
     lines: Vec<ProgramLine>,
 }
 
 impl Program {
-    /// Programa con estas líneas, en este orden (sin comprobar nada).
+    /// Program with these lines, in this order (without checking anything).
     #[must_use]
     pub const fn from_lines(lines: Vec<ProgramLine>) -> Self {
         Self { lines }
     }
 
-    /// Las líneas.
+    /// The lines.
     #[must_use]
     pub fn lines(&self) -> &[ProgramLine] {
         &self.lines
     }
 
-    /// Bytes que ocupa en RAM, sin el `$FF` final.
+    /// Bytes it takes in RAM, without the final `$FF`.
     #[must_use]
     pub fn byte_len(&self) -> usize {
         self.lines.iter().map(|l| l.body.len() + 4).sum()
     }
 
-    /// Interpreta un programa tokenizado: líneas hasta el final de los
-    /// bytes o hasta un byte alto $FF (lo que haya detrás se ignora).
-    /// Cada cuerpo debe terminar en `$0D` y cada número estar en
-    /// 1..=65279; el orden solo se avisa.
+    /// Reads a tokenized program: lines up to the end of the bytes or up to a high byte $FF
+    /// (whatever follows is ignored). Each body must end in `$0D` and each number be in 1..=65279;
+    /// the order only gives a warning.
     pub fn from_tokenized(bytes: &[u8]) -> Result<(Self, Vec<Warning>), BasicError> {
         let mut lines = Vec::new();
         let mut warnings = Vec::new();
@@ -820,21 +784,21 @@ impl Program {
                 break;
             }
             let (Some(&lo), Some(&len)) = (bytes.get(offset + 1), bytes.get(offset + 2)) else {
-                return Err(bad(offset, "l\u{ed}nea cortada"));
+                return Err(bad(offset, "line cut short"));
             };
             let number = u16::from(hi) << 8 | u16::from(lo);
             if number == 0 {
-                return Err(bad(offset, "n\u{fa}mero de l\u{ed}nea 0"));
+                return Err(bad(offset, "line number 0"));
             }
             if len == 0 {
-                return Err(bad(offset + 2, "longitud 0"));
+                return Err(bad(offset + 2, "length 0"));
             }
             let body_start = offset + 3;
             let Some(body) = bytes.get(body_start..body_start + usize::from(len)) else {
-                return Err(bad(offset, "l\u{ed}nea cortada"));
+                return Err(bad(offset, "line cut short"));
             };
             let Some((&CR, body)) = body.split_last() else {
-                return Err(bad(body_start + usize::from(len) - 1, "el cuerpo no termina en $0D"));
+                return Err(bad(body_start + usize::from(len) - 1, "the body does not end in $0D"));
             };
             if lines.last().is_some_and(|l: &ProgramLine| l.number >= number)
                 && !warnings.iter().any(|w: &Warning| w.kind == WarningKind::UnsortedLines)
@@ -847,17 +811,16 @@ impl Program {
         Ok((Self { lines }, warnings))
     }
 
-    /// Los bytes del programa tal como van en RAM, SIN el `$FF` final
-    /// (como los `.bin` del corpus y lo que hay entre `BASPRG_ST` y
-    /// `BASPRG_END`).
+    /// The bytes of the program as they go in RAM, WITHOUT the final `$FF` (as the corpus's `.bin`
+    /// files and what there is between `BASPRG_ST` and `BASPRG_END`).
     #[must_use]
     pub fn to_tokenized(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.byte_len());
         for line in &self.lines {
             out.push((line.number >> 8) as u8);
             out.push((line.number & 0xFF) as u8);
-            // `from_ascii` no deja pasar cuerpos de más de 254 bytes; con
-            // `from_lines` es cosa de quien lo construya.
+            // `from_ascii` does not let through bodies of more than 254 bytes; with `from_lines` it
+            // is up to whoever builds it.
             out.push(u8::try_from(line.body.len() + 1).unwrap_or(u8::MAX));
             out.extend_from_slice(&line.body);
             out.push(CR);
@@ -865,20 +828,17 @@ impl Program {
         out
     }
 
-    /// Lee un listado de texto.
+    /// Reads a text listing.
     ///
-    /// - Las líneas acaban en CRLF, CR (los `.ASC` de la CE-158) o LF.
-    /// - Se quitan espacios y tabuladores iniciales. Una línea que no
-    ///   empiece por un dígito se salta (y se cuenta en un aviso): las
-    ///   cabeceras `'` del corpus.
-    /// - El número es la tira de dígitos inicial (1..=65279). Con
-    ///   [`AsciiOptions::list_format`], un `:` justo detrás se quita.
-    /// - π es el token `PI` y √ el de `SQR`; el tabulador es un espacio;
-    ///   `\xNN` (dos dígitos hexadecimales) es el byte $NN tal cual; el
-    ///   resto de ASCII imprimible pasa igual. Cualquier otro carácter es
-    ///   un error con su línea y columna.
-    /// - Un número repetido sustituye al anterior (como el editor) y las
-    ///   líneas se ordenan.
+    /// - Lines end in CRLF, CR (the CE-158's `.ASC` files) or LF.
+    /// - Leading spaces and tabs are removed. A line that does not start with a digit is skipped
+    ///   (and counted in a warning): the corpus's `'` headers.
+    /// - The number is the leading string of digits (1..=65279). With
+    ///   [`AsciiOptions::list_format`], a `:` right after it is removed.
+    /// - π is the `PI` token and √ that of `SQR`; the tab is a space; `\xNN` (two hexadecimal
+    ///   digits) is the byte $NN as it is; the rest of printable ASCII goes through the same. Any
+    ///   other character is an error with its line and column.
+    /// - A repeated number replaces the previous one (as the editor does) and the lines are sorted.
     pub fn from_ascii(
         text: &str,
         keywords: &Keywords,
@@ -944,12 +904,10 @@ impl Program {
         Ok((Self { lines }, warnings))
     }
 
-    /// El listado como texto: `{número} {cuerpo}` y `eol` por línea, con
-    /// cada palabra clave seguida de un espacio, como `LIST` (`70
-    /// A=RND (5)+CHR$ 65`, `IF A=&FFGOTO 5120`). Los bytes fuera de
-    /// $20..=$7E, la barra invertida y los tokens desconocidos se
-    /// escriben como `\xNN`. [`Program::from_ascii`] con las mismas
-    /// opciones lo vuelve a convertir en exactamente los mismos bytes.
+    /// The listing as text: `{number} {body}` and `eol` per line, with each keyword followed by a
+    /// space, as `LIST` (`70 A=RND (5)+CHR$ 65`, `IF A=&FFGOTO 5120`). Bytes outside $20..=$7E, the
+    /// backslash and unknown tokens are written as `\xNN`. [`Program::from_ascii`] with the same
+    /// options turns it back into exactly the same bytes.
     #[must_use]
     pub fn to_ascii(&self, eol: Eol, keywords: &Keywords, options: &AsciiOptions) -> String {
         let mut out = String::new();
@@ -961,10 +919,9 @@ impl Program {
         out
     }
 
-    /// El listado en el formato de los `.ASC` de la CE-158(X) (`CSAVEa`,
-    /// los `BATHY.ASC`/`HEY.ASC` de Jeff Birt): número alineado a la
-    /// derecha en 5 caracteres, un espacio, el cuerpo, CR, y un CR más al
-    /// final. Se lee con [`Program::from_ascii`] como cualquier otro.
+    /// The listing in the format of the CE-158(X)'s `.ASC` files (`CSAVEa`, Jeff Birt's
+    /// `BATHY.ASC`/`HEY.ASC`): number right-aligned in 5 characters, a space, the body, CR, and one
+    /// more CR at the end. It is read with [`Program::from_ascii`] like any other.
     #[must_use]
     pub fn to_ce158_ascii(&self, keywords: &Keywords) -> String {
         let options = AsciiOptions::default();
@@ -978,17 +935,16 @@ impl Program {
         out
     }
 
-    /// Lee un `.BAS` con cabecera CE-158 (ver [`Ce158Header`]), con
-    /// manga ancha: se exige la firma `$01 "@COM"`, se toman como mucho
-    /// `longitud − 1 + 1` bytes tras la cabecera y el `$FF` final es
-    /// opcional (los archivos de Jeff Birt no lo traen; otros, con
-    /// longitud − 1 contando el `$FF`, sí). Las direcciones no se usan.
+    /// Reads a `.BAS` with a CE-158 header (see [`Ce158Header`]), leniently: the signature
+    /// `$01 "@COM"` is required, at most `length − 1 + 1` bytes after the header are taken and the
+    /// final `$FF` is optional (Jeff Birt's files do not have it; others, with length − 1 counting
+    /// the `$FF`, do). The addresses are not used.
     pub fn from_ce158(bytes: &[u8]) -> Result<(Self, Ce158Header, Vec<Warning>), BasicError> {
         if bytes.len() < CE158_HEADER_LEN {
-            return Err(BasicError::BadCe158Header("menos de 27 bytes"));
+            return Err(BasicError::BadCe158Header("less than 27 bytes"));
         }
         if !bytes.starts_with(&CE158_MAGIC) {
-            return Err(BasicError::BadCe158Header("no empieza por $01 \"@COM\""));
+            return Err(BasicError::BadCe158Header("it does not start with $01 \"@COM\""));
         }
         let word = |i: usize| u16::from(bytes[i]) << 8 | u16::from(bytes[i + 1]);
         let name_field = &bytes[5..5 + CE158_NAME_LEN];
@@ -1019,11 +975,10 @@ impl Program {
         Ok((program, header, warnings))
     }
 
-    /// El programa con la cabecera CE-158 que escribiría `CSAVE` en la
-    /// máquina real cargado en `start` (ver [`Ce158Header`]): `name`
-    /// truncado a 16 bytes (lo que no sea ASCII imprimible pasa a `_`),
-    /// longitud − 1, `start + longitud` como dirección final y los bytes
-    /// del programa sin el `$FF`.
+    /// The program with the CE-158 header that `CSAVE` would write on the real machine loaded at
+    /// `start` (see [`Ce158Header`]): `name` truncated to 16 bytes (anything not printable ASCII
+    /// becomes `_`), length − 1, `start + length` as the end address and the bytes of the program
+    /// without the `$FF`.
     #[must_use]
     pub fn to_ce158(&self, name: &str, start: u16) -> Vec<u8> {
         let program = self.to_tokenized();
@@ -1044,12 +999,12 @@ impl Program {
     }
 }
 
-/// Los 2 bytes de un token, en el orden en que van en el programa.
+/// The 2 bytes of a token, in the order they go in the program.
 const fn token_bytes(token: u16) -> [u8; 2] {
     [(token >> 8) as u8, (token & 0xFF) as u8]
 }
 
-/// Divide en líneas por CRLF, CR o LF.
+/// Splits into lines by CRLF, CR or LF.
 pub(crate) fn split_text_lines(text: &str) -> impl Iterator<Item = &str> {
     let mut rest = Some(text);
     iter::from_fn(move || {
@@ -1064,9 +1019,9 @@ pub(crate) fn split_text_lines(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Convierte el texto de una línea (tras el número) en los bytes que se
-/// teclearían (ver [`Program::from_ascii`]). `column_base` es cuántos
-/// caracteres de la línea de texto van antes, para los errores.
+/// Turns the text of a line (after the number) into the bytes that would be typed (see
+/// [`Program::from_ascii`]). `column_base` is how many characters of the text line come before, for
+/// the errors.
 fn encode_text(text: &str, line: u16, column_base: usize) -> Result<Vec<u8>, BasicError> {
     let mut out = Vec::with_capacity(text.len());
     let mut chars = text.chars().enumerate();
@@ -1097,9 +1052,8 @@ fn encode_text(text: &str, line: u16, column_base: usize) -> Result<Vec<u8>, Bas
     Ok(out)
 }
 
-/// Regla de [`AsciiOptions::list_format`] para `REM`: si tras el token
-/// vienen dos espacios, se quita uno (el que pone `LIST` tras la palabra
-/// clave).
+/// Rule of [`AsciiOptions::list_format`] for `REM`: if two spaces follow the token, one is removed
+/// (the one `LIST` puts after the keyword).
 fn collapse_rem_double_space(body: &mut Vec<u8>) {
     if let Some(rest) = rem_rest_offset(body)
         && body.get(rest..rest + 2) == Some(b"  ")
@@ -1108,8 +1062,8 @@ fn collapse_rem_double_space(body: &mut Vec<u8>) {
     }
 }
 
-/// Posición del primer byte tras el token `REM` de un cuerpo tokenizado,
-/// si lo hay (fuera de cadenas, como lo vería el intérprete).
+/// Position of the first byte after the `REM` token of a tokenized body, if any (outside strings,
+/// as the interpreter would see it).
 fn rem_rest_offset(body: &[u8]) -> Option<usize> {
     let mut i = 0;
     let mut in_string = false;
@@ -1129,8 +1083,7 @@ fn rem_rest_offset(body: &[u8]) -> Option<usize> {
     None
 }
 
-/// Añade a `out` el cuerpo `body` como lo lista la ROM (ver
-/// [`Program::to_ascii`]).
+/// Adds to `out` the body `body` as the ROM lists it (see [`Program::to_ascii`]).
 fn detokenize_body(out: &mut String, body: &[u8], keywords: &Keywords, options: AsciiOptions) {
     let mut i = 0;
     let mut in_string = false;
@@ -1167,7 +1120,7 @@ fn detokenize_body(out: &mut String, body: &[u8], keywords: &Keywords, options: 
     }
 }
 
-/// ASCII imprimible tal cual; lo demás (y `\`) como `\xNN`.
+/// Printable ASCII as it is; the rest (and `\`) as `\xNN`.
 fn push_escaped(out: &mut String, bytes: &[u8]) {
     for &b in bytes {
         if (0x20..=0x7E).contains(&b) && b != b'\\' {
@@ -1178,8 +1131,8 @@ fn push_escaped(out: &mut String, bytes: &[u8]) {
     }
 }
 
-/// Texto de un archivo: UTF-8 si lo es (sin BOM); si no, Latin-1 (los
-/// comentarios del corpus traen bytes sueltos que no son UTF-8).
+/// Text of a file: UTF-8 if it is (without BOM); otherwise, Latin-1 (the corpus's comments have
+/// stray bytes that are not UTF-8).
 #[must_use]
 pub fn decode_text(bytes: &[u8]) -> Cow<'_, str> {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
@@ -1189,37 +1142,36 @@ pub fn decode_text(bytes: &[u8]) -> Cow<'_, str> {
     )
 }
 
-// --- Formatos de archivo ----------------------------------------------------
+// --- File formats ----------------------------------------------------
 
-/// Formato de un archivo de programa al leerlo.
+/// Format of a program file when reading it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BasicFormat {
-    /// Listado de texto.
+    /// Text listing.
     Ascii,
-    /// Bytes tokenizados tal como van en RAM (con o sin `$FF` final).
+    /// Tokenized bytes as they go in RAM (with or without the final `$FF`).
     Tokenized,
-    /// Tokenizado con la cabecera de 27 bytes de la CE-158.
+    /// Tokenized with the CE-158's 27-byte header.
     Ce158,
 }
 
-/// Formato de un archivo de programa al escribirlo.
+/// Format of a program file when writing it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveFormat {
-    /// Texto con CRLF (`.txt`, la convención del corpus).
+    /// Text with CRLF (`.txt`, the corpus's convention).
     AsciiCrLf,
-    /// Texto con CR al estilo de los `.ASC` de la CE-158(X) (`.asc`).
+    /// Text with CR in the style of the CE-158(X)'s `.ASC` files (`.asc`).
     AsciiCr,
-    /// Bytes tokenizados sin cabecera ni `$FF` (`.bin`).
+    /// Tokenized bytes without header or `$FF` (`.bin`).
     Tokenized,
-    /// Tokenizado con cabecera CE-158 (`.bas` y sin extensión: lo que
-    /// hace `CSAVE "X"` en la CE-158).
+    /// Tokenized with a CE-158 header (`.bas` and no extension: what `CSAVE "X"` does on the
+    /// CE-158).
     Ce158,
 }
 
 impl SaveFormat {
-    /// El formato que toca por la extensión (sin el punto, da igual
-    /// mayúsculas o minúsculas): `.asc` CR, `.txt`/`.sbs` CRLF,
-    /// `.bin`/`.tok`/`.img` tokenizado y el resto (`.bas`, sin extensión)
+    /// The format due by the extension (without the dot, upper or lower case): `.asc` CR,
+    /// `.txt`/`.sbs` CRLF, `.bin`/`.tok`/`.img` tokenized and the rest (`.bas`, no extension)
     /// CE-158.
     #[must_use]
     pub fn for_extension(ext: Option<&str>) -> Self {
@@ -1231,24 +1183,21 @@ impl SaveFormat {
         }
     }
 
-    /// [`SaveFormat::for_extension`] con la extensión de `path`.
+    /// [`SaveFormat::for_extension`] with the extension of `path`.
     #[must_use]
     pub fn for_path(path: &Path) -> Self {
         Self::for_extension(path.extension().and_then(|e| e.to_str()))
     }
 }
 
-/// Averigua el formato de un archivo de programa por su contenido (y la
-/// extensión, sin punto):
-/// - `$01 "@COM"` al principio es CE-158, tenga la extensión que tenga.
-/// - `.bin`, `.tok` y `.img` son tokenizados.
-/// - Si no, un archivo con bytes de control que no salen en un texto
-///   (cualquiera por debajo de $20 salvo tabulador, CR, LF, FF y el
-///   Ctrl-Z de fin de archivo) que se lee entero como programa tokenizado
-///   es tokenizado: un programa tokenizado casi siempre los tiene (el
-///   byte alto de los números de línea menores de 8192, las longitudes
-///   cortas).
-/// - Lo demás, texto.
+/// Works out the format of a program file by its contents (and the extension, without the dot):
+/// - `$01 "@COM"` at the start is CE-158, whatever the extension.
+/// - `.bin`, `.tok` and `.img` are tokenized.
+/// - Otherwise, a file with control bytes that do not appear in a text (any below $20 except tab,
+///   CR, LF, FF and the end-of-file Ctrl-Z) that reads whole as a tokenized program is tokenized: a
+///   tokenized program almost always has them (the high byte of line numbers below 8192, the short
+///   lengths).
+/// - The rest, text.
 #[must_use]
 pub fn detect_format(ext: Option<&str>, bytes: &[u8]) -> BasicFormat {
     if bytes.len() >= CE158_HEADER_LEN && bytes.starts_with(&CE158_MAGIC) {
@@ -1269,7 +1218,7 @@ pub fn detect_format(ext: Option<&str>, bytes: &[u8]) -> BasicFormat {
     BasicFormat::Ascii
 }
 
-/// Un programa leído de un archivo.
+/// A program read from a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecodedProgram {
     pub program: Program,
@@ -1277,8 +1226,7 @@ pub struct DecodedProgram {
     pub warnings: Vec<Warning>,
 }
 
-/// Interpreta los bytes de un archivo de programa en `format` (ver
-/// [`detect_format`]).
+/// Reads the bytes of a program file in `format` (see [`detect_format`]).
 pub fn decode_program(
     bytes: &[u8],
     format: BasicFormat,
@@ -1296,9 +1244,8 @@ pub fn decode_program(
     Ok(DecodedProgram { program, format, warnings })
 }
 
-/// Los bytes del archivo de `program` en `format`. `name` (el nombre de
-/// la cabecera CE-158) y `start` (su dirección de inicio) solo cuentan en
-/// [`SaveFormat::Ce158`].
+/// The bytes of the file of `program` in `format`. `name` (the name of the CE-158 header) and
+/// `start` (its start address) only count for [`SaveFormat::Ce158`].
 #[must_use]
 pub fn encode_program(
     program: &Program,
@@ -1317,24 +1264,22 @@ pub fn encode_program(
     }
 }
 
-// --- La máquina emulada ---------------------------------------------------
+// --- The emulated machine ---------------------------------------------------
 
-/// Por qué no se pudo cargar un programa en la máquina.
+/// Why a program could not be loaded into the machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BasicLoadError {
-    /// La ROM no está esperando teclado en el prompt de BASIC (está
-    /// ejecutando, en un `INPUT`, en la pausa de un `PRINT`, apagada...).
-    /// No se ha tocado la memoria.
+    /// The ROM is not waiting for the keyboard at BASIC's prompt (it is running, in an `INPUT`, in
+    /// the pause of a `PRINT`, off...). The memory has not been touched.
     NotAtPrompt,
-    /// `RAM_ST_H`/`RAM_END_H` no describen una RAM (la ROM no ha
-    /// arrancado todavía).
+    /// `RAM_ST_H`/`RAM_END_H` do not describe a RAM (the ROM has not booted yet).
     NoRam,
-    /// El programa (con su `$FF`) necesita `need` bytes y desde su inicio
-    /// hasta el final de la RAM hay `avail`. No se ha tocado la memoria.
+    /// The program (with its `$FF`) needs `need` bytes and from its start to the end of RAM there
+    /// are `avail`. The memory has not been touched.
     TooBig { need: usize, avail: usize },
-    /// El archivo no es un programa válido.
+    /// The file is not a valid program.
     Format(BasicError),
-    /// No se pudo leer el archivo.
+    /// The file could not be read.
     Io(String),
 }
 
@@ -1342,15 +1287,15 @@ impl fmt::Display for BasicLoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotAtPrompt => f.write_str(
-                "la PC-1500 no est\u{e1} en el prompt BASIC (pulsa CL o BREAK)",
+                "the PC-1500 is not at the BASIC prompt (press CL or BREAK)",
             ),
-            Self::NoRam => f.write_str("la PC-1500 todav\u{ed}a no ha arrancado"),
+            Self::NoRam => f.write_str("the PC-1500 has not booted yet"),
             Self::TooBig { need, avail } => write!(
                 f,
-                "el programa necesita {need} bytes y solo hay {avail} libres"
+                "the program needs {need} bytes and there are only {avail} free"
             ),
             Self::Format(e) => e.fmt(f),
-            Self::Io(e) => write!(f, "error de lectura: {e}"),
+            Self::Io(e) => write!(f, "read error: {e}"),
         }
     }
 }
@@ -1363,67 +1308,63 @@ impl From<BasicError> for BasicLoadError {
     }
 }
 
-/// Por qué no se pudo guardar el programa de la máquina.
+/// Why the machine's program could not be saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BasicSaveError {
-    /// El programa en RAM está corrupto.
+    /// The program in RAM is corrupt.
     Program(BasicError),
-    /// No se pudo escribir el archivo.
+    /// The file could not be written.
     Io(String),
 }
 
 impl fmt::Display for BasicSaveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Program(e) => write!(f, "programa en memoria no v\u{e1}lido: {e}"),
-            Self::Io(e) => write!(f, "error de escritura: {e}"),
+            Self::Program(e) => write!(f, "program in memory not valid: {e}"),
+            Self::Io(e) => write!(f, "write error: {e}"),
         }
     }
 }
 
 impl Error for BasicSaveError {}
 
-/// Lo que hizo [`Pc1500::load_basic_program`].
+/// What [`Pc1500::load_basic_program`] did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadReport {
-    /// `BASPRG_ST`: dónde empieza el programa.
+    /// `BASPRG_ST`: where the program starts.
     pub start: u16,
-    /// `BASPRG_END`: la dirección de su `$FF`.
+    /// `BASPRG_END`: the address of its `$FF`.
     pub end: u16,
-    /// Bytes del programa, sin el `$FF`.
+    /// Bytes of the program, without the `$FF`.
     pub bytes: usize,
-    /// Líneas.
+    /// Lines.
     pub lines: usize,
-    /// Bytes libres entre el `$FF` y el final de la RAM.
+    /// Free bytes between the `$FF` and the end of RAM.
     pub free: usize,
-    /// Avisos al interpretar el archivo (vacío con
-    /// [`Pc1500::load_basic_program`]).
+    /// Warnings when reading the file (empty with [`Pc1500::load_basic_program`]).
     pub warnings: Vec<Warning>,
 }
 
-/// Lo que hizo [`Pc1500::save_basic_file`].
+/// What [`Pc1500::save_basic_file`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SaveReport {
     pub format: SaveFormat,
-    /// Bytes escritos en el archivo.
+    /// Bytes written to the file.
     pub bytes: usize,
-    /// Líneas del programa.
+    /// Lines of the program.
     pub lines: usize,
 }
 
-/// Páginas de las tablas de expansión que recorre la ROM tras la
-/// principal, con `PV`=0 y luego con `PV`=1 (`DEC_OPN` $FA58: pasos de 2
-/// KB, $B8, $B0, ..., $80).
+/// Pages of the expansion tables that the ROM walks after the main one, with `PV`=0 and then with
+/// `PV`=1 (`DEC_OPN` $FA58: steps of 2 KB, $B8, $B0, ..., $80).
 const EXPANSION_TABLE_PAGES: [u8; 8] = [0xB8, 0xB0, 0xA8, 0xA0, 0x98, 0x90, 0x88, 0x80];
 
 impl Pc1500 {
-    /// Las tablas de palabras clave de la máquina emulada, en el orden en
-    /// que las busca el tokenizador de la ROM (`TOK_INBUF` $F9C3: la
-    /// principal en $C000 y luego, con `DEC_OPN`, cada tabla con firma $55
-    /// en $B800, $B000, ..., $8000 con `PV`=0 y otra vez con `PV`=1). Se
-    /// leen de la memoria emulada, así que incluyen cualquier tabla de
-    /// expansión que esté mapeada. Una tabla que no se pueda interpretar
-    /// se salta.
+    /// The keyword tables of the emulated machine, in the order the ROM's tokenizer searches them
+    /// (`TOK_INBUF` $F9C3: the main one at $C000 and then, with `DEC_OPN`, each table with the
+    /// signature $55 at $B800, $B000, ..., $8000 with `PV`=0 and again with `PV`=1). They are read
+    /// from the emulated memory, so they include any expansion table that is mapped. A table that
+    /// cannot be read is skipped.
     #[must_use]
     pub fn basic_keywords(&self) -> Keywords {
         let mut tables = Vec::new();
@@ -1446,10 +1387,9 @@ impl Pc1500 {
         Keywords::from_tables(tables)
     }
 
-    /// Un byte de ME0 en $8000-$BFFF como lo vería la CPU con `pv`, sea
-    /// cual sea el `PV` que tenga ahora (ver `Pc1500::read_banked`, en
-    /// `memory.rs`: hoy solo está la tabla virtual de `CLOAD`/`CSAVE` en
-    /// $9800 con `PV`=0). Fuera de esa zona `PV` no cambia nada.
+    /// A byte of ME0 at $8000-$BFFF as the CPU would see it with `pv`, whatever `PV` it has now
+    /// (see `Pc1500::read_banked`, in `memory.rs`: today there is only the virtual table of
+    /// `CLOAD`/`CSAVE` at $9800 with `PV`=0). Outside that area `PV` changes nothing.
     fn read_table_byte(&self, addr: u16, pv: bool) -> u8 {
         if (0x8000..0xC000).contains(&addr) {
             return self.read_banked(addr, pv);
@@ -1466,22 +1406,20 @@ impl Pc1500 {
         self.write_byte(u32::from(addr) + 1, (value & 0xFF) as u8);
     }
 
-    /// Corrige el programa de arranque que `MemoryBus::new()` pone en
-    /// $0100 (ver [`Pc1500::new`]) para que sea un programa BASIC válido,
-    /// igual que si se hubiera cargado con [`Pc1500::load_basic_program`]:
+    /// Fixes the boot program that `MemoryBus::new()` puts in RAM (bathyscaph at $00C5, see
+    /// [`Pc1500::new`]) so that it is a valid BASIC program, as if it had been loaded with
+    /// [`Pc1500::load_basic_program`]:
     ///
-    /// - Escribe el `$FF` de fin en `BASPRG_END` (el fixture no lo trae y
-    ///   la memoria de usuario empieza a 0). Sin él, la ROM sigue
-    ///   buscando líneas en los ceros que hay detrás: teclear `5645 A=2`
-    ///   tras arrancar con `mole` metía la línea en un sitio absurdo y
-    ///   `LIST` mostraba basura (`65535:~~ "MOLE"`).
-    /// - Pone `VAR_START` = `RAM_END_H`:00 = $4800, lo que haría
-    ///   `DEL_DIM_VAR` ($D091). El arranque en frío no lo hace (solo
-    ///   `RUN`, `NEW` y `CLEAR`), así que quedaba en $FFFF y un `DIM` en
-    ///   modo directo, o un `GOTO` sin `RUN`, usaba una base absurda.
+    /// - Writes the end `$FF` at `BASPRG_END` (if the file does not have it). Without it, the ROM
+    ///   goes on looking for lines in the zeros behind it: typing a new last line after booting put
+    ///   it in an absurd place and `LIST` showed garbage (`65535:~~ ...`).
+    /// - Sets `VAR_START` = the end of RAM (`RAM_END_H`:00, $4800 on a PC-1500 and $5800 on a
+    ///   PC-1500A), what `DEL_DIM_VAR` ($D091) would do. The cold start does not do it (only `RUN`,
+    ///   `NEW` and `CLEAR` do), so it stayed at $FFFF and a `DIM` in direct mode, or a `GOTO`
+    ///   without `RUN`, used an absurd base.
     ///
-    /// La pantalla de arranque (`NEW0? :CHECK`), `LIST` y `RUN` no
-    /// cambian; en memoria cambian esos 3 bytes.
+    /// The boot screen (`NEW0? :CHECK`), `LIST` and `RUN` do not change; in memory those 3 bytes
+    /// do.
     pub(crate) fn fix_boot_fixture(&mut self) {
         let start = self.read_word(BASPRG_ST);
         let end = self.read_word(BASPRG_END);
@@ -1492,46 +1430,37 @@ impl Pc1500 {
         self.write_word(VAR_START, user_end & 0xFF00);
     }
 
-    /// `true` si la ROM está en el prompt de BASIC esperando teclado, el
-    /// único momento en que se puede cambiar el programa desde fuera: la
-    /// CPU dormida en `WAIT_4_KB` ([`Pc1500::is_waiting_for_key`]) y
-    /// [`BREAKPARAM`] sin los bits de "dentro de un programa" ($50 en un
-    /// `INPUT`, $20 en la pausa de un `PRINT`). Tras un `STOP` o un BREAK
-    /// ($80) sí cuenta como prompt.
+    /// `true` if the ROM is at BASIC's prompt waiting for the keyboard, the only moment the program
+    /// can be changed from outside: the CPU asleep in `WAIT_4_KB` ([`Pc1500::is_waiting_for_key`])
+    /// and [`BREAKPARAM`] without the "inside a program" bits ($50 in an `INPUT`, $20 in the pause
+    /// of a `PRINT`). After a `STOP` or a BREAK ($80) it does count as a prompt.
     #[must_use]
     pub fn is_at_basic_prompt(&self) -> bool {
         self.is_waiting_for_key() && self.read_byte(u32::from(BREAKPARAM)) & BREAKPARAM_BUSY == 0
     }
 
-    /// Carga `program` como programa BASIC de la máquina, sustituyendo al
-    /// que hubiera, como lo dejaría teclearlo tras un `NEW` (validado con
-    /// `LIST`, las flechas arriba/abajo, editar líneas, `RUN`, `CONT` y
-    /// `MODE`):
+    /// Loads `program` as the machine's BASIC program, replacing whatever there was, as typing it
+    /// after a `NEW` would leave it (checked with `LIST`, the up/down arrows, editing lines, `RUN`,
+    /// `CONT` and `MODE`):
     ///
-    /// 1. Solo en el prompt ([`Pc1500::is_at_basic_prompt`]); si no,
-    ///    [`BasicLoadError::NotAtPrompt`] sin tocar nada.
-    /// 2. Empieza en el `BASPRG_ST` actual, o en `RAM_ST_H`:$C5 (lo que
-    ///    pone `NEW0`) si ese no está dentro de la RAM.
-    /// 3. Tiene que caber con su `$FF` antes de `RAM_END_H`:00
-    ///    (`PRGLINE_TDI_6` $CF7F `CPA (RAM_END_H)`); si no,
-    ///    [`BasicLoadError::TooBig`] sin tocar nada.
-    /// 4. Escribe los bytes y el `$FF`, `BASPRG_ST` = `BASPRG_EDT` =
-    ///    inicio y `BASPRG_END` = la dirección del `$FF` (como `NEW`,
-    ///    $C853-$C85C).
+    /// 1. Only at the prompt ([`Pc1500::is_at_basic_prompt`]); otherwise,
+    ///    [`BasicLoadError::NotAtPrompt`] without touching anything.
+    /// 2. It starts at the current `BASPRG_ST`, or at `RAM_ST_H`:$C5 (what `NEW0` sets) if that is
+    ///    not inside the RAM.
+    /// 3. It has to fit with its `$FF` before `RAM_END_H`:00 (`PRGLINE_TDI_6` $CF7F
+    ///    `CPA (RAM_END_H)`); otherwise, [`BasicLoadError::TooBig`] without touching anything.
+    /// 4. It writes the bytes and the `$FF`, `BASPRG_ST` = `BASPRG_EDT` = start and `BASPRG_END` =
+    ///    the address of the `$FF` (as `NEW`, $C853-$C85C).
     /// 5. `VAR_START` = `RAM_END_H`:00 (`DEL_DIM_VAR`, $D091).
-    /// 6. La parte de `INIT_SYS_ADDR` ($CFCC-$D00C) que tiene sentido con
-    ///    la ROM esperando teclado: `DATA_PTR` = (inicio + 3) | $8000;
-    ///    $78A2/A3, $78B4/B5, `ERL` ($789B) y $7895-$7898 a 0;
-    ///    `ON_ERR_ADD_H` ($78B8) |= $80; `CURS_CTRL` ($7B0E) &= $1F;
-    ///    `BREAKPARAM` = 0 (así `CONT` da `ERROR 1` en vez de continuar
-    ///    dentro del programa viejo); `GOSB_STK_PTR_L` ($7891) = $FF y
-    ///    `FORNXT_STK_PTR` ($7890) = $38.
+    /// 6. The part of `INIT_SYS_ADDR` ($CFCC-$D00C) that makes sense with the ROM waiting for the
+    ///    keyboard: `DATA_PTR` = (start + 3) | $8000; $78A2/A3, $78B4/B5, `ERL` ($789B) and
+    ///    $7895-$7898 to 0; `ON_ERR_ADD_H` ($78B8) |= $80; `CURS_CTRL` ($7B0E) &= $1F; `BREAKPARAM`
+    ///    = 0 (so `CONT` gives `ERROR 1` instead of going on inside the old program);
+    ///    `GOSB_STK_PTR_L` ($7891) = $FF and `FORNXT_STK_PTR` ($7890) = $38.
     ///
-    /// NO se tocan $7871-$787E (el cursor y su parpadeo, en uso dentro de
-    /// `WAIT_4_KB`), ni las direcciones de búsqueda de línea, ni
-    /// $789C-$78B7 (llenarlas de $FF, como el resto de
-    /// `INIT_SYS_ADDR`, rompía las teclas `MODE` y arriba), ni las
-    /// variables fijas, `TRON` o `WAIT`. `ROM_ST` sigue en $FFFF.
+    /// NOT touched: $7871-$787E (the cursor and its blinking, in use inside `WAIT_4_KB`), the line
+    /// search addresses, $789C-$78B7 (filling them with $FF, as the rest of `INIT_SYS_ADDR`, broke
+    /// the `MODE` and up keys), the fixed variables, `TRON` or `WAIT`. `ROM_ST` stays at $FFFF.
     pub fn load_basic_program(&mut self, program: &Program) -> Result<LoadReport, BasicLoadError> {
         if !self.is_at_basic_prompt() {
             return Err(BasicLoadError::NotAtPrompt);
@@ -1556,9 +1485,8 @@ impl Pc1500 {
         })
     }
 
-    /// Dónde empieza un programa que sustituya al actual y dónde acaba la
-    /// RAM (`RAM_END_H`:00): los pasos 2 y 3 de
-    /// [`Pc1500::load_basic_program`]. Lo usa también `CLOAD` (ver
+    /// Where a program that replaces the current one starts and where the RAM ends
+    /// (`RAM_END_H`:00): steps 2 and 3 of [`Pc1500::load_basic_program`]. `CLOAD` uses it too (see
     /// `host_io.rs`).
     pub(crate) fn program_load_area(&self) -> Result<(u16, u16), BasicLoadError> {
         let ram_st_h = self.read_byte(u32::from(RAM_ST_H));
@@ -1576,9 +1504,9 @@ impl Pc1500 {
         Ok((start, ram_end))
     }
 
-    /// Escribe `bytes` (un programa sin `$FF`) en `start`, el `$FF` detrás
-    /// y los punteros `BASPRG_ST`/`BASPRG_EDT`/`BASPRG_END`, como `NEW`
-    /// ($C853-$C85C). Devuelve la dirección del `$FF`.
+    /// Writes `bytes` (a program without `$FF`) at `start`, the `$FF` after it and the pointers
+    /// `BASPRG_ST`/`BASPRG_EDT`/`BASPRG_END`, as `NEW` ($C853-$C85C). It returns the address of the
+    /// `$FF`.
     pub(crate) fn write_program(&mut self, start: u16, bytes: &[u8]) -> u16 {
         for (addr, &byte) in (u32::from(start)..).zip(bytes) {
             self.write_byte(addr, byte);
@@ -1591,7 +1519,7 @@ impl Pc1500 {
         end
     }
 
-    /// Ver el paso 6 de [`Pc1500::load_basic_program`].
+    /// See step 6 of [`Pc1500::load_basic_program`].
     fn init_sys_addr_subset(&mut self, start: u16) {
         self.write_word(DATA_PTR, start.wrapping_add(3) | 0x8000);
         for addr in [0x78A2_u32, 0x78A3, 0x78B4, 0x78B5, 0x789B, 0x7895, 0x7896, 0x7897, 0x7898] {
@@ -1606,10 +1534,9 @@ impl Pc1500 {
         self.write_byte(0x7890, 0x38);
     }
 
-    /// Interpreta `bytes` (ver [`detect_format`], `ext` sin punto) con las
-    /// palabras clave de la máquina ([`Pc1500::basic_keywords`]) y lo
-    /// carga con [`Pc1500::load_basic_program`]. Los avisos van en el
-    /// [`LoadReport`].
+    /// Reads `bytes` (see [`detect_format`], `ext` without the dot) with the machine's keywords
+    /// ([`Pc1500::basic_keywords`]) and loads it with [`Pc1500::load_basic_program`]. The warnings
+    /// go in the [`LoadReport`].
     pub fn load_basic_bytes(
         &mut self,
         bytes: &[u8],
@@ -1623,17 +1550,16 @@ impl Pc1500 {
         Ok(report)
     }
 
-    /// [`Pc1500::load_basic_bytes`] de un archivo, con las opciones
-    /// predeterminadas.
+    /// [`Pc1500::load_basic_bytes`] of a file, with the default options.
     pub fn load_basic_file(&mut self, path: &Path) -> Result<LoadReport, BasicLoadError> {
         let bytes = fs::read(path).map_err(|e| BasicLoadError::Io(e.to_string()))?;
         let ext = path.extension().and_then(|e| e.to_str());
         self.load_basic_bytes(&bytes, ext, &AsciiOptions::default())
     }
 
-    /// Los bytes del programa BASIC de la máquina sin el `$FF`: las
-    /// líneas desde `BASPRG_ST` hasta la que empiece por $FF, sin pasar
-    /// de `BASPRG_END` (ni del final de la RAM si este no tiene sentido).
+    /// The bytes of the machine's BASIC program without the `$FF`: the lines from `BASPRG_ST` up to
+    /// the one that starts with $FF, not going past `BASPRG_END` (nor the end of RAM if it makes no
+    /// sense).
     #[must_use]
     pub fn basic_program_bytes(&self) -> Vec<u8> {
         let start = self.read_word(BASPRG_ST);
@@ -1655,17 +1581,14 @@ impl Pc1500 {
         self.read_bytes(u32::from(start), usize::from(addr.saturating_sub(start)))
     }
 
-    /// El programa BASIC de la máquina (ver
-    /// [`Pc1500::basic_program_bytes`]).
+    /// The machine's BASIC program (see [`Pc1500::basic_program_bytes`]).
     pub fn basic_program(&self) -> Result<Program, BasicError> {
         Program::from_tokenized(&self.basic_program_bytes()).map(|(program, _)| program)
     }
 
-    /// Guarda el programa BASIC de la máquina en `path`, en `format` o,
-    /// si es `None`, en el que toque por la extensión
-    /// ([`SaveFormat::for_path`]: `.bas` CE-158, `.asc` texto CR, `.txt`
-    /// texto CRLF, `.bin` tokenizado). La cabecera CE-158 lleva el nombre
-    /// del archivo y la dirección de inicio actual.
+    /// Saves the machine's BASIC program to `path`, in `format` or, if `None`, in the one due by
+    /// the extension ([`SaveFormat::for_path`]: `.bas` CE-158, `.asc` CR text, `.txt` CRLF text,
+    /// `.bin` tokenized). The CE-158 header carries the file's name and the current start address.
     pub fn save_basic_file(
         &self,
         path: &Path,
@@ -1698,22 +1621,22 @@ mod tests {
         let lines: Vec<&str> = split_text_lines("a\r\nb\rc\nd").collect();
         assert_eq!(lines, ["a", "b", "c", "d"], "CRLF, CR y LF");
         let with_blank: Vec<&str> = split_text_lines("a\r\r\n").collect();
-        assert_eq!(with_blank, ["a", ""], "l\u{ed}nea vac\u{ed}a intermedia");
+        assert_eq!(with_blank, ["a", ""], "empty line in between");
     }
 
     #[test]
     fn escapes_round_trip() {
         let src = encode_text("A\\x0D\\xF0\\y", 10, 0).unwrap_or_default();
-        assert_eq!(src, b"A\x0D\xF0\\y", "\\xNN y barra suelta");
+        assert_eq!(src, b"A\x0D\xF0\\y", "\\xNN and a lone backslash");
         let mut out = String::new();
         push_escaped(&mut out, b"A\\\x01~");
-        assert_eq!(out, "A\\x5C\\x01~", "escape de bytes no imprimibles");
+        assert_eq!(out, "A\\x5C\\x01~", "escape of non-printable bytes");
     }
 
     #[test]
     fn save_format_by_extension() {
         assert_eq!(SaveFormat::for_extension(Some("BAS")), SaveFormat::Ce158, ".bas");
-        assert_eq!(SaveFormat::for_extension(None), SaveFormat::Ce158, "sin extensi\u{f3}n");
+        assert_eq!(SaveFormat::for_extension(None), SaveFormat::Ce158, "no extension");
         assert_eq!(SaveFormat::for_extension(Some("asc")), SaveFormat::AsciiCr, ".asc");
         assert_eq!(SaveFormat::for_extension(Some("txt")), SaveFormat::AsciiCrLf, ".txt");
         assert_eq!(SaveFormat::for_extension(Some("bin")), SaveFormat::Tokenized, ".bin");

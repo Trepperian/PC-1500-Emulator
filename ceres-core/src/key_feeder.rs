@@ -1,52 +1,42 @@
-//! Alimentador de teclas: convierte lo que hace el teclado del host (o el
-//! ratón sobre las teclas de la pantalla, o un texto pegado) en
-//! pulsaciones y sueltas de la PC-1500 medidas en TIEMPO EMULADO.
+//! Key feeder: turns what the host's keyboard does (or the mouse on the keys on screen, or a pasted
+//! text) into presses and releases of PC-1500 keys measured in EMULATED TIME.
 //!
-//! # Por qué hace falta
-//! La ROM no ve "eventos de tecla", ve la matriz pulsada o no en cada
-//! despertar de su bucle de espera (`WAIT_4_KB`, $E243) y tiene sus
-//! propios antirrebotes: una tecla tiene que estar pulsada varios frames
-//! y luego el teclado vacío otros tantos antes de la siguiente (ver
-//! [`KEY_HOLD_FRAMES`] y [`KEY_RELEASE_FRAMES`], medidos con el arnés).
-//! Antes la GUI pulsaba y soltaba las teclas con un temporizador de 150
-//! ms de tiempo de HOST: a 0.05x eso son ~0.65 frames emulados y la ROM
-//! perdía las teclas; a 50x, decenas de frames. Aquí todo se cuenta en
-//! frames emulados ([`crate::TICKS_PER_FRAME`] ciclos), así que una
-//! pulsación dura lo mismo para la ROM a cualquier velocidad, en pausa
-//! (no avanza) o en los tests.
+//! # Why it is needed
+//! The ROM does not see "key events", it sees the matrix pressed or not at each wake-up of its wait
+//! loop (`WAIT_4_KB`, $E243) and has its own debouncing: a key has to be down for several frames
+//! and then the keyboard empty for as many before the next one (see [`KEY_HOLD_FRAMES`] and
+//! [`KEY_RELEASE_FRAMES`], measured with the harness). The GUI used to press and release the keys
+//! with a timer of 150 ms of HOST time: at 0.05x that is ~0.65 emulated frames and the ROM lost the
+//! keys; at 50x, dozens of frames. Here everything is counted in emulated frames
+//! ([`crate::TICKS_PER_FRAME`] cycles), so a key press lasts the same for the ROM at any speed,
+//! paused (it does not move on) or in the tests.
 //!
-//! # Cómo se mide el tiempo
-//! [`KeyFeeder::tick`] avanza la máquina de estados un paso por frame
-//! emulado. Lo llama `Pc1500::run_frame_hooks` desde dentro de
-//! [`Pc1500::run_for_ticks`] cada vez que se cumplen
-//! [`crate::TICKS_PER_FRAME`] ciclos, NO una vez por llamada: la GUI
-//! llama a `run_for_ticks` con presupuestos de cualquier tamaño (~433
-//! ciclos por repintado a 0.02x, millones en modo Máx) y el ritmo de
-//! las teclas no debe depender de eso.
+//! # How time is measured
+//! [`KeyFeeder::tick`] moves the state machine one step per emulated frame.
+//! `Pc1500::run_frame_hooks` calls it from inside [`Pc1500::run_for_ticks`] each time
+//! [`crate::TICKS_PER_FRAME`] cycles are up, NOT once per call: the GUI calls `run_for_ticks` with
+//! budgets of any size (~433 cycles per repaint at 0.02x, millions in Max mode) and the pace of the
+//! keys must not depend on that.
 //!
-//! # Dos clases de pasos
-//! - [`StepKind::Live`]: una tecla física del host (o del ratón). Empieza
-//!   en cuanto le toca, sin esperar a la ROM, como un dedo de verdad, y
-//!   se mantiene pulsada MIENTRAS el host la tenga pulsada (con un mínimo
-//!   de [`KEY_HOLD_FRAMES`]): así funcionan la autorrepetición propia de
-//!   la ROM en las flechas y los juegos con `INKEY$`. Si llega otra
-//!   tecla viva mientras tanto, la nueva gana ("rollover", como en los
-//!   teclados de PC).
-//! - [`StepKind::Typed`]: un carácter de un texto pegado
-//!   ([`Pc1500::queue_text`]). Pulsación de duración mínima, y antes de
-//!   cada una se espera a que la ROM esté lista para la siguiente tecla
-//!   ([`Pc1500::is_ready_for_key`]) durante 2 frames seguidos, o como
-//!   mucho [`TYPED_IDLE_TIMEOUT_FRAMES`]: así un listado pegado
-//!   sobrevive a lo que tarda la ROM en procesar cada ENTER.
+//! # Two kinds of steps
+//! - [`StepKind::Live`]: a physical key of the host (or of the mouse). It starts as soon as its
+//!   turn comes, without waiting for the ROM, like a real finger, and stays down WHILE the host
+//!   keeps it down (at least [`KEY_HOLD_FRAMES`]): that is how the ROM's own key repeat on the
+//!   arrows and the games with `INKEY$` work. If another live key comes in the meantime, the new
+//!   one wins ("rollover", as on PC keyboards).
+//! - [`StepKind::Typed`]: a character of a pasted text ([`Pc1500::queue_text`]). A key press of
+//!   minimum length, and before each one it waits for the ROM to be ready for the next key
+//!   ([`Pc1500::is_ready_for_key`]) for 2 frames in a row, or at most
+//!   [`TYPED_IDLE_TIMEOUT_FRAMES`]: so a pasted listing survives the time the ROM takes to process
+//!   each ENTER.
 //!
-//! `ON/BRK` no pasa por la cola: no está en la matriz (va a PB7, ver
-//! `Keyboard::on_pulse`) y es justo la tecla con la que se interrumpe lo
-//! que esté pasando, así que se pulsa en el acto y además cancela el
-//! texto pegado pendiente.
+//! `ON/BRK` does not go through the queue: it is not in the matrix (it goes to PB7, see
+//! `Keyboard::on_pulse`) and it is precisely the key that interrupts whatever is going on, so it is
+//! pressed at once and also cancels the pasted text pending.
 //!
-//! El alimentador solo toca las teclas que pulsa él: lo que se pulse con
-//! [`Pc1500::press`]/[`Pc1500::release`] (p. ej. el `tap` síncrono del
-//! arnés) no lo ve ni lo suelta. No mezclar las dos cosas a la vez.
+//! The feeder only touches the keys it presses itself: what is pressed with
+//! [`Pc1500::press`]/[`Pc1500::release`] (e.g. the harness's synchronous `tap`) it neither sees nor
+//! releases. Do not mix both at the same time.
 
 use std::collections::VecDeque;
 
@@ -56,54 +46,48 @@ use crate::{
     keyboard::{KeyStroke, Keyboard, key_for_char},
 };
 
-/// Identificador de una tecla física del host.
+/// Identifier of a physical key of the host.
 ///
-/// Lo elige la GUI: p. ej. el código de la tecla física, o uno reservado
-/// para el ratón. Sirve para
-/// emparejar la suelta con su pulsación aunque entre medias cambien los
-/// modificadores o la tecla lógica.
+/// The GUI chooses it: e.g. the physical key's code, or one reserved for the mouse. It is used to
+/// pair the release with its press even if the modifiers or the logical key change in between.
 pub type HostKeyId = u32;
 
-/// Máximo de frames emulados que un carácter pegado espera a la ROM.
+/// Maximum of emulated frames that a pasted character waits for the ROM.
 ///
-/// Son ~4.6 s a 1x: lo que espera cada carácter de
-/// [`Pc1500::queue_text`] a que la ROM esté lista para teclado. Pasado ese tiempo se teclea de todas formas: así un programa en marcha
-/// que lee el teclado con `INKEY$` (y nunca se para en `WAIT_4_KB`)
-/// también recibe el texto, aunque despacio.
+/// It is ~4.6 s at 1x: how long each character of [`Pc1500::queue_text`] waits for the ROM to be
+/// ready for the keyboard. After that time it is typed anyway: so a running program that reads the
+/// keyboard with `INKEY$` (and never stops in `WAIT_4_KB`) also gets the text, if slowly.
 pub const TYPED_IDLE_TIMEOUT_FRAMES: usize = 400;
 
-/// Frames emulados mínimos que se mantiene pulsada `ON/BRK`.
+/// Minimum emulated frames that `ON/BRK` is held down.
 ///
-/// La ROM solo necesita el flanco (ver `Keyboard::on_pulse`), así que
-/// basta con poco.
+/// The ROM only needs the edge (see `Keyboard::on_pulse`), so a little is enough.
 pub const ON_MIN_HOLD_FRAMES: usize = 2;
 
-/// Bit `SHIFT` del byte de indicadores $764E (ver
-/// [`Pc1500::lcd_symbol_bytes`]): el prefijo `SHIFT` está "enganchado".
+/// The `SHIFT` bit of the indicator byte $764E (see [`Pc1500::lcd_symbol_bytes`]): the `SHIFT`
+/// prefix is "latched".
 const SYMBOL_SHIFT: u8 = 0x02;
-/// Bit `SML` (minúsculas) del byte de indicadores $764E.
+/// The `SML` (lowercase) bit of the indicator byte $764E.
 const SYMBOL_SML: u8 = 0x08;
-/// Dirección del byte de indicadores con `SHIFT`/`SML`/`DEF`.
+/// Address of the indicator byte with `SHIFT`/`SML`/`DEF`.
 const SYMBOLS_ADDR: u32 = 0x764E;
 
-/// Cómo decide el alimentador si hace falta pulsar `SHIFT` (como prefijo,
-/// ver [`KeyStroke`]) antes de la tecla.
+/// How the feeder decides whether `SHIFT` has to be pressed (as a prefix, see [`KeyStroke`]) before
+/// the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShiftPolicy {
-    /// Lo de una persona con el teclado del host: pulsar `SHIFT` solo si
-    /// la pulsación lo lleva y el indicador `SHIFT` no está ya
-    /// enganchado. Un `SHIFT` que el usuario enganchó a propósito (F11 o
-    /// la tecla de la pantalla) sigue valiendo para la siguiente tecla, y
-    /// en modo `SML` las letras salen como saldrían en la máquina real.
+    /// What a person does with the host's keyboard: press `SHIFT` only if the key press carries it
+    /// and the `SHIFT` indicator is not latched already. A `SHIFT` that the user latched on purpose
+    /// (F11 or the key on screen) still counts for the next key, and in `SML` mode letters come out
+    /// as they would on the real machine.
     AddIfNeeded,
-    /// Teclear EXACTAMENTE el carácter pedido (texto pegado, o letras con
-    /// "distinguir mayúsculas/minúsculas"): se tiene en cuenta el modo
-    /// `SML` (que invierte mayúsculas/minúsculas en las letras) y un
-    /// `SHIFT` enganchado que sobre se quita pulsándolo otra vez.
+    /// Type EXACTLY the character asked for (pasted text, or letters with "match upper/lower
+    /// case"): it takes into account the `SML` mode (which swaps upper and lower case for letters),
+    /// and a latched `SHIFT` that is not wanted is removed by pressing it again.
     Exact,
 }
 
-/// Una tecla en la cola del alimentador.
+/// A key in the feeder's queue.
 #[derive(Clone, Copy, Debug)]
 struct Step {
     kind: StepKind,
@@ -113,37 +97,34 @@ struct Step {
 
 #[derive(Clone, Copy, Debug)]
 enum StepKind {
-    /// Tecla física del host (`id`, o `None` para pulsaciones sueltas de
-    /// [`Pc1500::host_tap`]): se mantiene hasta que el host la suelte
-    /// (`host_released`).
+    /// Physical key of the host (`id`, or `None` for the one-off key presses of
+    /// [`Pc1500::host_tap`]): it is held until the host releases it (`host_released`).
     Live {
         id: Option<HostKeyId>,
         host_released: bool,
     },
-    /// Carácter de un texto pegado: pulsación mínima, esperando antes a
-    /// que la ROM esté lista.
+    /// Character of a pasted text: a minimum key press, waiting first for the ROM to be ready.
     Typed,
 }
 
-/// En qué punto de la pulsación del primer paso de la cola está el
-/// alimentador. El número es cuántos frames lleva en esa fase.
+/// At which point of the key press of the queue's first step the feeder is. The number is how many
+/// frames it has been in that phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
-    /// Nada pulsado; el primer paso de la cola (si lo hay) todavía no ha
-    /// empezado.
+    /// Nothing pressed; the queue's first step (if any) has not started yet.
     Idle,
-    /// `SHIFT` (prefijo) pulsado.
+    /// `SHIFT` (prefix) pressed.
     ShiftDown(usize),
-    /// `SHIFT` soltado, esperando a que la ROM vea el teclado vacío.
+    /// `SHIFT` released, waiting for the ROM to see the keyboard empty.
     ShiftGap(usize),
-    /// La tecla del primer paso de la cola, pulsada.
+    /// The key of the queue's first step, pressed.
     Down(usize),
-    /// La tecla ya se soltó y su paso salió de la cola; esperando a que la
-    /// ROM vea el teclado vacío antes del siguiente.
+    /// The key was already released and its step left the queue; waiting for the ROM to see the
+    /// keyboard empty before the next one.
     Gap(usize),
 }
 
-/// `ON/BRK` pulsada desde el host.
+/// `ON/BRK` pressed from the host.
 #[derive(Clone, Copy, Debug)]
 struct OnHold {
     id: HostKeyId,
@@ -151,10 +132,10 @@ struct OnHold {
     host_released: bool,
 }
 
-/// Lo que el alimentador necesita saber de la máquina en cada frame.
+/// What the feeder needs to know about the machine at each frame.
 #[derive(Clone, Copy, Debug)]
 pub struct FeedEnv {
-    /// El byte de indicadores $764E (bits `SHIFT` y `SML`).
+    /// The indicator byte $764E (bits `SHIFT` and `SML`).
     pub symbols: u8,
     /// [`Pc1500::is_ready_for_key`].
     pub rom_ready: bool,
@@ -162,17 +143,15 @@ pub struct FeedEnv {
     pub powered_on: bool,
 }
 
-/// La máquina de estados del alimentador. Ver el comentario del módulo.
+/// The feeder's state machine. See the module's comment.
 #[derive(Debug)]
 pub struct KeyFeeder {
     queue: VecDeque<Step>,
     phase: Phase,
     on: Option<OnHold>,
-    /// Frames seguidos (contados en cada [`KeyFeeder::tick`]) con la ROM
-    /// lista para teclado.
+    /// Frames in a row (counted at each [`KeyFeeder::tick`]) with the ROM ready for the keyboard.
     ready_streak: usize,
-    /// Frames que lleva esperando a la ROM el carácter pegado del frente
-    /// de la cola.
+    /// Frames that the pasted character at the front of the queue has been waiting for the ROM.
     waited: usize,
 }
 
@@ -187,8 +166,7 @@ impl KeyFeeder {
         }
     }
 
-    /// `true` si el primer paso de la cola ya ha empezado (tiene `SHIFT`
-    /// o su tecla pulsados).
+    /// `true` if the queue's first step has already started (it has `SHIFT` or its key down).
     const fn front_active(&self) -> bool {
         matches!(
             self.phase,
@@ -196,7 +174,7 @@ impl KeyFeeder {
         )
     }
 
-    /// Ver [`Pc1500::host_key_down_with`].
+    /// See [`Pc1500::host_key_down_with`].
     pub fn key_down(
         &mut self,
         kb: &mut Keyboard,
@@ -220,7 +198,7 @@ impl KeyFeeder {
         }
     }
 
-    /// Ver [`Pc1500::host_key_up`].
+    /// See [`Pc1500::host_key_up`].
     pub fn key_up(&mut self, id: HostKeyId) {
         if let Some(on) = &mut self.on
             && on.id == id
@@ -236,7 +214,7 @@ impl KeyFeeder {
         }
     }
 
-    /// Ver [`Pc1500::host_tap_with`].
+    /// See [`Pc1500::host_tap_with`].
     pub fn tap(&mut self, kb: &mut Keyboard, strokes: &[KeyStroke], policy: ShiftPolicy) {
         for &stroke in strokes {
             if stroke.key == Key::On {
@@ -251,7 +229,7 @@ impl KeyFeeder {
         }
     }
 
-    /// Ver [`Pc1500::queue_text`].
+    /// See [`Pc1500::queue_text`].
     pub fn queue_text(&mut self, text: &str) -> Vec<char> {
         let mut skipped = Vec::new();
         for c in text.chars().filter(|&c| c != '\r') {
@@ -267,17 +245,15 @@ impl KeyFeeder {
         skipped
     }
 
-    /// `ON/BRK` pulsada: en el acto, sin cola (ver el comentario del
-    /// módulo), y cancelando el texto pegado pendiente.
+    /// `ON/BRK` pressed: at once, without a queue (see the module's comment), and cancelling the
+    /// pasted text pending.
     fn on_down(&mut self, kb: &mut Keyboard, id: HostKeyId, host_released: bool) {
-        // Otra tecla del host que también es ON/BRK (Esc y F12, p. ej.)
-        // mientras `ON` sigue pulsada (por la primera, o aún dentro de su
-        // mínimo de frames): manda la última que se pulsó, así que `ON` se
-        // suelta cuando se suelte esa, aunque la anterior siga pulsada (la
-        // suelta de la anterior ya no cuenta). Tampoco hay pulso nuevo: la
-        // ROM solo ve el flanco de subida de `ON` (`on_pulse`), así que dos
-        // BREAK más rápidos que `ON_MIN_HOLD_FRAMES` cuentan como uno, que
-        // para un BREAK da igual.
+        // Another host key that is also ON/BRK (Esc and F12, e.g.) while `ON` is still down
+        // (because of the first one, or still within its minimum of frames): the last one pressed
+        // rules, so `ON` is released when that one is released, even if the previous one is still
+        // down (the release of the previous one no longer counts). There is no new pulse either:
+        // the ROM only sees the rising edge of `ON` (`on_pulse`), so two BREAKs faster than
+        // `ON_MIN_HOLD_FRAMES` count as one, which for a BREAK makes no difference.
         if let Some(on) = &mut self.on {
             on.id = id;
             on.host_released = host_released;
@@ -288,7 +264,7 @@ impl KeyFeeder {
         self.cancel_typing(kb);
     }
 
-    /// Ver [`Pc1500::cancel_typing`].
+    /// See [`Pc1500::cancel_typing`].
     pub fn cancel_typing(&mut self, kb: &mut Keyboard) {
         let active_typed = self.front_active()
             && matches!(self.queue.front(), Some(Step { kind: StepKind::Typed, .. }));
@@ -296,14 +272,14 @@ impl KeyFeeder {
             self.abort_front(kb);
         }
         self.queue.retain(|step| !matches!(step.kind, StepKind::Typed));
-        // La espera a la ROM es la del carácter pegado del frente, que ya
-        // no está: que el siguiente texto pegado empiece a contar de cero.
-        // Si el frente es ahora una tecla viva, `waited` no le afecta.
+        // The wait for the ROM is that of the pasted character at the front, which is no longer
+        // there: let the next pasted text start counting from zero. If the front is now a live key,
+        // `waited` does not affect it.
         self.waited = 0;
     }
 
-    /// Suelta lo que tenga pulsado el primer paso de la cola (ya
-    /// empezado), lo saca de la cola y pasa a [`Phase::Gap`].
+    /// Releases whatever the queue's first step (already started) has down, takes it out of the
+    /// queue and moves to [`Phase::Gap`].
     fn abort_front(&mut self, kb: &mut Keyboard) {
         match self.phase {
             Phase::ShiftDown(_) => kb.release(Key::Shift),
@@ -318,7 +294,7 @@ impl KeyFeeder {
         self.phase = Phase::Gap(0);
     }
 
-    /// Ver [`Pc1500::release_all_host_keys`].
+    /// See [`Pc1500::release_all_host_keys`].
     pub fn release_all(&mut self) {
         if let Some(on) = &mut self.on {
             on.host_released = true;
@@ -330,12 +306,12 @@ impl KeyFeeder {
         }
     }
 
-    /// Pasos en la cola, incluido el que se está tecleando.
+    /// Steps in the queue, including the one being typed.
     pub fn pending(&self) -> usize {
         self.queue.len()
     }
 
-    /// Un frame emulado. Ver el comentario del módulo.
+    /// One emulated frame. See the module's comment.
     pub fn tick(&mut self, kb: &mut Keyboard, env: FeedEnv) {
         self.ready_streak = if env.rom_ready { self.ready_streak + 1 } else { 0 };
 
@@ -347,9 +323,8 @@ impl KeyFeeder {
             }
         }
 
-        // Con la máquina apagada no hay nadie leyendo el teclado: el texto
-        // pegado pendiente se descarta en vez de esperar al tiempo límite
-        // tecla a tecla.
+        // With the machine off nobody is reading the keyboard: the pasted text pending is dropped
+        // instead of waiting for the time limit key by key.
         if !env.powered_on {
             self.cancel_typing(kb);
         }
@@ -393,10 +368,9 @@ impl KeyFeeder {
         }
     }
 
-    /// `true` si la tecla del primer paso (ya pulsada el mínimo) se puede
-    /// soltar: siempre si es un carácter pegado; si es una tecla viva,
-    /// cuando el host la ha soltado o cuando hay otra tecla viva más
-    /// nueva esperando (rollover).
+    /// `true` if the key of the first step (already down for the minimum) can be released: always
+    /// if it is a pasted character; if it is a live key, when the host has released it or when
+    /// another, newer live key is waiting (rollover).
     fn front_may_release(&self) -> bool {
         let Some(front) = self.queue.front() else {
             return true;
@@ -414,9 +388,8 @@ impl KeyFeeder {
         }
     }
 
-    /// Empieza el primer paso de la cola, si lo hay y le toca: pulsa
-    /// `SHIFT` (prefijo) si hace falta según su [`ShiftPolicy`], o la
-    /// tecla directamente.
+    /// Starts the queue's first step, if there is one and its turn has come: presses `SHIFT`
+    /// (prefix) if needed according to its [`ShiftPolicy`], or the key directly.
     fn start_front(&mut self, kb: &mut Keyboard, env: FeedEnv) {
         let Some(&step) = self.queue.front() else {
             self.waited = 0;
@@ -449,13 +422,11 @@ impl KeyFeeder {
     }
 }
 
-/// Identificador que usa [`Pc1500::host_tap`] para un `ON/BRK` suelto
-/// (pulsado y soltado a la vez).
+/// Identifier that [`Pc1500::host_tap`] uses for a one-off `ON/BRK` (pressed and released at once).
 const TAP_ON_ID: HostKeyId = HostKeyId::MAX;
 
 impl Pc1500 {
-    /// Gancho por frame (ver `Pc1500::run_frame_hooks`): un paso del
-    /// alimentador de teclas.
+    /// Per-frame hook (see `Pc1500::run_frame_hooks`): one step of the key feeder.
     pub(crate) fn feed_keys(&mut self) {
         let env = FeedEnv {
             symbols: self.read_byte(SYMBOLS_ADDR),
@@ -465,84 +436,74 @@ impl Pc1500 {
         self.feeder.tick(&mut self.keyboard, env);
     }
 
-    /// Una tecla física del host (identificada por `id`) se acaba de
-    /// pulsar y genera `stroke`: se teclea en cuanto le toque y se
-    /// mantiene pulsada en la PC-1500 hasta [`Pc1500::host_key_up`] (como
-    /// mínimo [`KEY_HOLD_FRAMES`] frames emulados, por breve que haya
-    /// sido en el host). Con [`ShiftPolicy::AddIfNeeded`]; ver
-    /// [`Pc1500::host_key_down_with`].
+    /// A physical key of the host (identified by `id`) has just been pressed and generates
+    /// `stroke`: it is typed as soon as its turn comes and held down on the PC-1500 until
+    /// [`Pc1500::host_key_up`] (at least [`KEY_HOLD_FRAMES`] emulated frames, however brief it was
+    /// on the host). With [`ShiftPolicy::AddIfNeeded`]; see [`Pc1500::host_key_down_with`].
     pub fn host_key_down(&mut self, id: HostKeyId, stroke: KeyStroke) {
         self.host_key_down_with(id, stroke, ShiftPolicy::AddIfNeeded);
     }
 
-    /// Como [`Pc1500::host_key_down`], eligiendo cómo se decide el
-    /// `SHIFT` (ver [`ShiftPolicy`]).
+    /// As [`Pc1500::host_key_down`], choosing how `SHIFT` is decided (see [`ShiftPolicy`]).
     ///
-    /// Una segunda pulsación del mismo `id` sin haberlo soltado (la
-    /// autorrepetición del sistema operativo) se ignora: la ROM ya hace
-    /// su propia autorrepetición. `ON/BRK` ([`Key::On`]) no espera turno:
-    /// se pulsa en el acto y cancela el texto pegado pendiente (ver
-    /// [`Pc1500::cancel_typing`]).
+    /// A second press of the same `id` without releasing it (the operating system's key repeat) is
+    /// ignored: the ROM does its own key repeat. `ON/BRK` ([`Key::On`]) does not wait its turn: it
+    /// is pressed at once and cancels the pasted text pending (see [`Pc1500::cancel_typing`]).
     pub fn host_key_down_with(&mut self, id: HostKeyId, stroke: KeyStroke, policy: ShiftPolicy) {
         self.feeder.key_down(&mut self.keyboard, id, stroke, policy);
     }
 
-    /// La tecla física `id` se ha soltado en el host: su tecla de la
-    /// PC-1500 se suelta en cuanto haya cumplido el mínimo. Si no estaba
-    /// pulsada, no hace nada.
+    /// The physical key `id` has been released on the host: its PC-1500 key is released as soon as
+    /// it has done its minimum. If it was not down, it does nothing.
     pub fn host_key_up(&mut self, id: HostKeyId) {
         self.feeder.key_up(id);
     }
 
-    /// Pulsaciones sueltas de duración fija en tiempo emulado (pulsar y
-    /// soltar), en orden, como teclas vivas ya soltadas: p. ej. la tecla
-    /// Retroceso del host (← y luego `DEL`) o, a más de 1x, cada pulsación
-    /// del host. Con [`ShiftPolicy::AddIfNeeded`].
+    /// One-off key presses of fixed length in emulated time (press and release), in order, as live
+    /// keys already released: e.g. the host's Backspace key (← and then `DEL`) or, above 1x, each
+    /// key press of the host. With [`ShiftPolicy::AddIfNeeded`].
     pub fn host_tap(&mut self, strokes: &[KeyStroke]) {
         self.host_tap_with(strokes, ShiftPolicy::AddIfNeeded);
     }
 
-    /// Como [`Pc1500::host_tap`], eligiendo cómo se decide el `SHIFT`.
+    /// As [`Pc1500::host_tap`], choosing how `SHIFT` is decided.
     pub fn host_tap_with(&mut self, strokes: &[KeyStroke], policy: ShiftPolicy) {
         self.feeder.tap(&mut self.keyboard, strokes, policy);
     }
 
-    /// Teclea `text` (p. ej. pegado del portapapeles) carácter a
-    /// carácter, exactamente ([`ShiftPolicy::Exact`]: respeta
-    /// mayúsculas/minúsculas también con `SML`), esperando antes de cada
-    /// tecla a que la ROM esté lista (ver el comentario del módulo
-    /// `key_feeder`). `\r` se ignora y `\n` es ENTER.
+    /// Types `text` (e.g. pasted from the clipboard) character by character, exactly
+    /// ([`ShiftPolicy::Exact`]: it respects upper and lower case also with `SML`), waiting before
+    /// each key for the ROM to be ready (see the comment of the `key_feeder` module). `\r` is
+    /// ignored and `\n` is ENTER.
     ///
-    /// Devuelve los caracteres que no se pueden teclear (sin tecla en la
-    /// PC-1500, ver [`key_for_char`]), que se saltan; el resto se teclea
-    /// igualmente.
+    /// It returns the characters that cannot be typed (with no key on the PC-1500, see
+    /// [`key_for_char`]), which are skipped; the rest is typed all the same.
     pub fn queue_text(&mut self, text: &str) -> Vec<char> {
         self.feeder.queue_text(text)
     }
 
-    /// Descarta el texto pegado pendiente (y suelta la tecla que se
-    /// estuviera tecleando de él). Las teclas vivas del host no se tocan.
+    /// Drops the pasted text pending (and releases the key of it being typed). The host's live keys
+    /// are not touched.
     pub fn cancel_typing(&mut self) {
         self.feeder.cancel_typing(&mut self.keyboard);
     }
 
-    /// Da por soltadas todas las teclas del host (al perder el foco la
-    /// ventana, o al dejar de capturar el teclado): cada una se suelta en
-    /// cuanto cumpla su mínimo, así que ninguna se queda pegada ni se
-    /// pierde. El texto pegado pendiente sigue.
+    /// Takes all the host's keys as released (when the window loses focus, or when the keyboard
+    /// stops being captured): each one is released as soon as it does its minimum, so none gets
+    /// stuck or lost. The pasted text pending goes on.
     pub fn release_all_host_keys(&mut self) {
         self.feeder.release_all();
     }
 
-    /// Pasos pendientes en el alimentador (teclas vivas y caracteres
-    /// pegados), incluido el que se está tecleando ahora.
+    /// Steps pending in the feeder (live keys and pasted characters), including the one being typed
+    /// now.
     #[must_use]
     pub fn pending_keystrokes(&self) -> usize {
         self.feeder.pending()
     }
 
-    /// `true` si `key` está pulsada ahora mismo en la matriz emulada (por
-    /// el alimentador o por [`Pc1500::press`]). Para pintar las teclas.
+    /// `true` if `key` is down right now in the emulated matrix (by the feeder or by
+    /// [`Pc1500::press`]). To paint the keys.
     #[must_use]
     pub const fn is_key_pressed(&self, key: Key) -> bool {
         self.keyboard.is_pressed(key)
@@ -561,8 +522,7 @@ mod tests {
     const READY: FeedEnv = FeedEnv { symbols: 0, rom_ready: true, powered_on: true };
     const BUSY: FeedEnv = FeedEnv { symbols: 0, rom_ready: false, powered_on: true };
 
-    /// Ejecuta `frames` ticks y devuelve, para cada uno, las teclas
-    /// pulsadas después del tick.
+    /// Runs `frames` ticks and returns, for each one, the keys down after the tick.
     fn run(feeder: &mut KeyFeeder, kb: &mut Keyboard, env: FeedEnv, frames: usize) -> Vec<Vec<Key>> {
         (0..frames)
             .map(|_| {
@@ -590,13 +550,13 @@ mod tests {
         let mut kb = Keyboard::new();
         feeder.key_down(&mut kb, 1, KeyStroke::plain(Key::Left), ShiftPolicy::AddIfNeeded);
         run(&mut feeder, &mut kb, BUSY, 50);
-        assert!(kb.is_pressed(Key::Left), "sigue pulsada");
-        // Repetición del SO: ignorada.
+        assert!(kb.is_pressed(Key::Left), "still down");
+        // OS key repeat: ignored.
         feeder.key_down(&mut kb, 1, KeyStroke::plain(Key::Left), ShiftPolicy::AddIfNeeded);
         assert_eq!(feeder.pending(), 1);
         feeder.key_up(1);
         run(&mut feeder, &mut kb, BUSY, 1);
-        assert!(!kb.is_pressed(Key::Left), "suelta en el siguiente frame");
+        assert!(!kb.is_pressed(Key::Left), "released in the next frame");
     }
 
     #[test]
@@ -606,10 +566,10 @@ mod tests {
         feeder.tap(&mut kb, &[KeyStroke::shifted(Key::LeftParen)], ShiftPolicy::AddIfNeeded);
         let frames = run(&mut feeder, &mut kb, BUSY, 2 * (KEY_HOLD_FRAMES + KEY_RELEASE_FRAMES));
         assert_eq!(frames[0], vec![Key::Shift]);
-        assert!(frames.iter().all(|keys| keys.len() <= 1), "nunca dos a la vez");
+        assert!(frames.iter().all(|keys| keys.len() <= 1), "never two at once");
         assert!(frames.iter().any(|keys| keys == &vec![Key::LeftParen]));
 
-        // Con SHIFT ya enganchado no se vuelve a pulsar.
+        // With SHIFT already latched it is not pressed again.
         let latched = FeedEnv { symbols: 0x02, ..BUSY };
         feeder.tap(&mut kb, &[KeyStroke::shifted(Key::LeftParen)], ShiftPolicy::AddIfNeeded);
         let after_latch = run(&mut feeder, &mut kb, latched, 1);
@@ -621,7 +581,7 @@ mod tests {
         let mut kb = Keyboard::new();
         let sml = FeedEnv { symbols: 0x08, ..READY };
         let cases = [
-            // (texto, entorno, ¿SHIFT primero?)
+            // (text, environment, SHIFT first?)
             ('A', READY, false),
             ('a', READY, true),
             ('A', sml, true),
@@ -638,7 +598,7 @@ mod tests {
             assert_eq!(
                 first.as_deref() == Some(&[Key::Shift][..]),
                 shift_first,
-                "{c:?} con $764E={:#04X}: {frames:?}",
+                "{c:?} with $764E={:#04X}: {frames:?}",
                 env.symbols
             );
             run(&mut feeder, &mut kb, env, 20);
@@ -652,15 +612,15 @@ mod tests {
         let mut kb = Keyboard::new();
         feeder.queue_text("A");
         let frames = run(&mut feeder, &mut kb, BUSY, TYPED_IDLE_TIMEOUT_FRAMES);
-        assert!(frames.iter().all(Vec::is_empty), "espera a la ROM");
+        assert!(frames.iter().all(Vec::is_empty), "waits for the ROM");
         run(&mut feeder, &mut kb, BUSY, 1);
-        assert!(kb.is_pressed(Key::A), "pasado el l\u{ed}mite, se teclea");
+        assert!(kb.is_pressed(Key::A), "past the limit, it is typed");
 
         let mut ready_feeder = KeyFeeder::new();
         let mut ready_kb = Keyboard::new();
         ready_feeder.queue_text("A");
         let ready_frames = run(&mut ready_feeder, &mut ready_kb, READY, 2);
-        assert_eq!(ready_frames, vec![vec![], vec![Key::A]], "2 frames lista");
+        assert_eq!(ready_frames, vec![vec![], vec![Key::A]], "ready for 2 frames");
     }
 
     #[test]
@@ -671,7 +631,7 @@ mod tests {
         run(&mut feeder, &mut kb, BUSY, 1);
         feeder.key_down(&mut kb, 2, KeyStroke::plain(Key::I), ShiftPolicy::AddIfNeeded);
         let frames = run(&mut feeder, &mut kb, BUSY, 30);
-        assert!(kb.is_pressed(Key::I), "la nueva queda mantenida");
+        assert!(kb.is_pressed(Key::I), "the new one stays held");
         assert!(!kb.is_pressed(Key::H));
         assert!(frames.iter().all(|keys| keys.len() <= 1));
         feeder.key_up(1); // la vieja ya no estaba: no pasa nada
@@ -688,13 +648,13 @@ mod tests {
         run(&mut feeder, &mut kb, READY, 3);
         assert!(kb.is_pressed(Key::H));
         feeder.key_down(&mut kb, 9, KeyStroke::plain(Key::On), ShiftPolicy::AddIfNeeded);
-        assert!(kb.is_pressed(Key::On), "en el acto");
+        assert!(kb.is_pressed(Key::On), "at once");
         assert!(kb.take_on_pulse());
-        assert!(!kb.is_pressed(Key::H), "la tecla pegada se suelta");
-        assert_eq!(feeder.pending(), 0, "texto cancelado");
+        assert!(!kb.is_pressed(Key::H), "the pasted key is released");
+        assert_eq!(feeder.pending(), 0, "text cancelled");
         feeder.key_up(9);
         run(&mut feeder, &mut kb, READY, 1);
-        assert!(kb.is_pressed(Key::On), "m\u{ed}nimo de 2 frames");
+        assert!(kb.is_pressed(Key::On), "minimum of 2 frames");
         run(&mut feeder, &mut kb, READY, 1);
         assert!(!kb.is_pressed(Key::On));
     }
@@ -720,6 +680,6 @@ mod tests {
         feeder.tap(&mut kb, &[KeyStroke::plain(Key::C)], ShiftPolicy::AddIfNeeded);
         let off = FeedEnv { powered_on: false, ..BUSY };
         run(&mut feeder, &mut kb, off, 1);
-        assert_eq!(feeder.pending(), 1, "solo queda la tecla viva");
+        assert_eq!(feeder.pending(), 1, "only the live key is left");
     }
 }

@@ -1,92 +1,82 @@
-//! Planificador de tiempo real de la emulación ("pacer"): decide cuántos
-//! ciclos de CPU emular en cada `update()` de la GUI para que la PC-1500
-//! vaya a la velocidad pedida, y mide la que consigue de verdad.
+//! Real-time scheduler of the emulation ("pacer"): decides how many CPU cycles to emulate in each
+//! `update()` of the GUI so that the PC-1500 goes at the speed asked for, and measures the one it
+//! really gets.
 //!
-//! # Por qué hace falta
-//! Antes la GUI emulaba como mucho UN frame (`step_frame()`, 15000 ciclos
-//! = ~11.5 ms emulados) por `update()`, y solo si había pasado al menos
-//! `FRAME_DURATION / multiplicador` desde el anterior. Con vsync a 60 Hz
-//! `update()` llega cada ~16.7 ms, así que la emulación iba como mucho a
-//! 11.5 / 16.7 = 0.69x, pidiera lo que pidiera el slider (en un monitor
-//! de 144 Hz, a ~1.66x). Además el tiempo sobrante entre frames se tiraba
-//! en cada `update()` y no había forma de recuperar un tirón.
+//! # Why it is needed
+//! The GUI used to emulate at most ONE frame (`step_frame()`, 15000 cycles = ~11.5 emulated ms) per
+//! `update()`, and only if at least `FRAME_DURATION / multiplier` had gone by since the previous
+//! one. With vsync at 60 Hz `update()` comes every ~16.7 ms, so the emulation went at most at 11.5
+//! / 16.7 = 0.69x, whatever the slider asked for (on a 144 Hz monitor, at ~1.66x). Besides, the
+//! time left over between frames was thrown away at each `update()` and there was no way to make up
+//! for a hiccup.
 //!
-//! # Cómo funciona
-//! Lleva una "deuda" de ciclos: cada `update()` le suma el tiempo real
-//! transcurrido × [`ceres_core::CPU_HZ`] × multiplicador, y emula en
-//! trozos ([`CHUNK_TICKS`]) hasta saldarla o hasta agotar el presupuesto
-//! de tiempo de host del `update()` (para que la interfaz siga
-//! respondiendo). El exceso de la última instrucción de cada trozo queda
-//! como deuda negativa, así que no hay deriva a largo plazo.
+//! # How it works
+//! It keeps a "debt" of cycles: each `update()` adds to it the real time elapsed ×
+//! [`ceres_core::CPU_HZ`] × multiplier, and it emulates in pieces ([`CHUNK_TICKS`]) until it is
+//! paid off or the `update()`'s budget of host time runs out (so that the GUI stays responsive).
+//! The excess of the last instruction of each piece remains as negative debt, so there is no drift
+//! in the long run.
 //!
-//! - Si el host no da para la velocidad pedida y se agota el presupuesto,
-//!   la deuda pendiente se TIRA en vez de arrastrarse: arrastrarla haría
-//!   que cada `update()` debiera más que el anterior (la "espiral de la
-//!   muerte") y la interfaz acabaría congelada. Se avisa con
+//! - If the host cannot keep up with the speed asked for and the budget runs out, the pending debt
+//!   is DROPPED instead of being carried over: carrying it would make each `update()` owe more than
+//!   the previous one (the "death spiral") and the GUI would end up frozen. It is reported with
 //!   [`Measurement::host_limited`].
-//! - El tiempo transcurrido se limita a [`MAX_DT`]: con la ventana
-//!   minimizada u oculta `update()` puede no llamarse en segundos (eframe
-//!   duerme 10 ms por frame minimizado y en Wayland una ventana oculta no
-//!   recibe repintados), y al volver no debe haber una ráfaga para
-//!   "recuperar" ese tiempo.
-//! - En modo [`SpeedMode::Max`] no hay deuda: se emula sin parar hasta
-//!   agotar el presupuesto.
+//! - The elapsed time is limited to [`MAX_DT`]: with the window minimized or hidden `update()` may
+//!   not be called for seconds (eframe sleeps 10 ms per minimized frame and on Wayland a hidden
+//!   window gets no repaints), and on coming back there must be no burst to "make up" that time.
+//! - In [`SpeedMode::Max`] mode there is no debt: it emulates nonstop until the budget runs out.
 //!
-//! Es lógica pura, sin egui: el reloj (`now`), el fin del presupuesto
-//! (`deadline_passed`) y la emulación (`run_ticks`) llegan como
-//! parámetros, así que los tests usan un reloj y una emulación falsos.
+//! It is pure logic, without egui: the clock (`now`), the end of the budget (`deadline_passed`) and
+//! the emulation (`run_ticks`) come as parameters, so the tests use a fake clock and emulation.
 
 use std::time::{Duration, Instant};
 
-/// [`ceres_core::CPU_HZ`] en coma flotante.
-#[expect(clippy::cast_precision_loss, reason = "1.3e6 cabe exacto en un f64")]
+/// [`ceres_core::CPU_HZ`] in floating point.
+#[expect(clippy::cast_precision_loss, reason = "1.3e6 fits exactly in an f64")]
 const CPU_HZ_F: f64 = ceres_core::CPU_HZ as f64;
 
-/// Tamaño máximo de cada trozo de emulación entre dos miradas al reloj:
-/// un frame, ~80-150 µs de host en release. Más pequeño = presupuesto más
-/// preciso pero más llamadas; da igual para la emulación, que no depende
-/// de cómo se trocee (ver `Pc1500::run_for_ticks`).
+/// Maximum size of each piece of emulation between two looks at the clock: one frame, ~80-150 µs of
+/// host time in release. Smaller = a more precise budget but more calls; it makes no difference to
+/// the emulation, which does not depend on how it is split (see `Pc1500::run_for_ticks`).
 pub const CHUNK_TICKS: usize = ceres_core::TICKS_PER_FRAME;
 
-/// Tiempo real máximo que se acepta entre dos `update()` (ver el
-/// comentario del módulo).
+/// Maximum real time accepted between two `update()`s (see the module's comment).
 pub const MAX_DT: Duration = Duration::from_millis(100);
 
-/// Ventana sobre la que se mide la velocidad efectiva.
+/// Window over which the effective speed is measured.
 pub const MEASURE_WINDOW: Duration = Duration::from_millis(500);
 
-/// Velocidad de emulación pedida.
+/// Emulation speed asked for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SpeedMode {
-    /// Múltiplo del tiempo real de hardware (1.0 = una PC-1500 real).
+    /// Multiple of real hardware time (1.0 = a real PC-1500).
     Multiplier(f64),
-    /// Todo lo que dé el host ("turbo").
+    /// As much as the host gives ("turbo").
     Max,
 }
 
-/// Medida de la velocidad efectiva durante la última ventana completa de
-/// [`MEASURE_WINDOW`].
+/// Measurement of the effective speed during the last complete window of [`MEASURE_WINDOW`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Measurement {
-    /// Ciclos emulados por segundo real, como múltiplo de
-    /// [`ceres_core::CPU_HZ`] (1.0 = tiempo real de hardware).
+    /// Emulated cycles per real second, as a multiple of [`ceres_core::CPU_HZ`] (1.0 = real
+    /// hardware time).
     pub multiplier: f64,
-    /// Ciclos emulados por segundo real, en MHz.
+    /// Emulated cycles per real second, in MHz.
     pub emulated_mhz: f64,
-    /// `true` si en esa ventana no se pudo emular todo lo pedido (se tiró
-    /// deuda) o se estaba en modo Máx: la velocidad la marca el host.
+    /// `true` if in that window not everything asked for could be emulated (debt was dropped) or it
+    /// was in Max mode: the speed is set by the host.
     pub host_limited: bool,
 }
 
-/// Ver el comentario del módulo.
+/// See the module's comment.
 #[derive(Debug, Default)]
 pub struct Pacer {
-    /// Ciclos que se deben a la emulación (puede ser algo negativa: el
-    /// exceso de la última instrucción de un trozo).
+    /// Cycles owed to the emulation (it can be slightly negative: the excess of the last
+    /// instruction of a piece).
     debt_ticks: f64,
-    /// Instante del `advance` anterior, o `None` tras [`Pacer::pause`].
+    /// Instant of the previous `advance`, or `None` after [`Pacer::pause`].
     last_update: Option<Instant>,
-    /// Inicio de la ventana de medida en curso.
+    /// Start of the measurement window in progress.
     window_start: Option<Instant>,
     window_ticks: u64,
     window_host_limited: bool,
@@ -99,9 +89,9 @@ impl Pacer {
         Self::default()
     }
 
-    /// La emulación se para (pausa, paso a paso, Reset): olvida el tiempo
-    /// transcurrido y la deuda, para que al reanudar no haya un salto, y
-    /// descarta la medida (no tiene sentido mientras no corre).
+    /// The emulation stops (pause, step by step, Reset): forgets the elapsed time and the debt, so
+    /// that there is no jump on resuming, and drops the measurement (it makes no sense while it is
+    /// not running).
     pub const fn pause(&mut self) {
         self.debt_ticks = 0.0;
         self.last_update = None;
@@ -111,24 +101,23 @@ impl Pacer {
         self.measurement = None;
     }
 
-    /// La última medida de velocidad efectiva, si ya hay una ventana
-    /// completa desde el último [`Pacer::pause`].
+    /// The last measurement of effective speed, if there is already a complete window since the
+    /// last [`Pacer::pause`].
     #[must_use]
     pub const fn measurement(&self) -> Option<Measurement> {
         self.measurement
     }
 
-    /// Avanza la emulación lo que toque en este `update()` y devuelve los
-    /// ciclos emulados.
+    /// Moves the emulation on as much as is due in this `update()` and returns the cycles emulated.
     ///
-    /// - `now`: el instante de este `update()`.
-    /// - `deadline_passed`: si se ha agotado ya el presupuesto de tiempo
-    ///   de host de este `update()`; se consulta tras cada trozo.
-    /// - `run_ticks(n)`: emula al menos `n` ciclos y devuelve los que
-    ///   emuló (`Pc1500::run_for_ticks`).
+    /// - `now`: the instant of this `update()`.
+    /// - `deadline_passed`: whether this `update()`'s budget of host time has run out already; it
+    ///   is checked after each piece.
+    /// - `run_ticks(n)`: emulates at least `n` cycles and returns those it emulated
+    ///   (`Pc1500::run_for_ticks`).
     ///
-    /// El primer `advance` (o el primero tras [`Pacer::pause`]) solo
-    /// pone en marcha el reloj: no hay tiempo transcurrido que emular.
+    /// The first `advance` (or the first after [`Pacer::pause`]) only starts the clock: there is no
+    /// elapsed time to emulate.
     pub fn advance(
         &mut self,
         now: Instant,
@@ -165,8 +154,8 @@ impl Pacer {
                     ran += to_u64(got);
                     self.debt_ticks -= to_f64(got);
                     if self.debt_ticks >= 1.0 && deadline_passed() {
-                        // Sin espiral de la muerte: lo que no dio tiempo
-                        // a emular se tira (ver el comentario del módulo).
+                        // No death spiral: what there was no time to emulate is dropped (see the
+                        // module's comment).
                         self.debt_ticks = 0.0;
                         self.window_host_limited = true;
                     }
@@ -191,14 +180,12 @@ impl Pacer {
     }
 }
 
-/// Presupuesto de tiempo de host de un `update()` dedicado a emular,
-/// a partir de `predicted_dt` de egui (lo que se espera que dure el frame
-/// de la interfaz, 1/60 s con vsync a 60 Hz).
+/// Budget of host time of an `update()` devoted to emulating, from egui's `predicted_dt` (how long
+/// the GUI's frame is expected to last, 1/60 s with vsync at 60 Hz).
 ///
-/// Normalmente el 60% del frame, para dejar el resto a la interfaz y
-/// mantener sus fps (10 ms a 60 Hz, 4.2 ms a 144 Hz). En modo Máx el
-/// 150%: se acepta perder algún vsync (la interfaz baja a ~30-40 fps) a
-/// cambio de dedicar más host a emular. Siempre entre 2 y 25 ms.
+/// Usually 60% of the frame, to leave the rest to the GUI and keep its fps (10 ms at 60 Hz, 4.2 ms
+/// at 144 Hz). In Max mode 150%: losing a vsync now and then is accepted (the GUI drops to ~30-40
+/// fps) in exchange for devoting more of the host to emulating. Always between 2 and 25 ms.
 #[must_use]
 pub fn update_budget(predicted_dt: f32, max: bool) -> Duration {
     let frame = if predicted_dt.is_finite() {
@@ -210,11 +197,11 @@ pub fn update_budget(predicted_dt: f32, max: bool) -> Duration {
     Duration::from_secs_f32((frame * fraction).clamp(0.002, 0.025))
 }
 
-/// Trozo a emular con `debt` ciclos de deuda: entre 1 y [`CHUNK_TICKS`].
+/// Piece to emulate with `debt` cycles of debt: between 1 and [`CHUNK_TICKS`].
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "se recorta a [1, CHUNK_TICKS] antes de convertir"
+    reason = "it is clamped to [1, CHUNK_TICKS] before converting"
 )]
 const fn debt_chunk(debt: f64) -> usize {
     debt.clamp(1.0, to_f64(CHUNK_TICKS)) as usize
@@ -224,19 +211,18 @@ fn to_u64(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 
-#[expect(clippy::cast_precision_loss, reason = "ciclos de un update(): muy por debajo de 2^52")]
+#[expect(clippy::cast_precision_loss, reason = "cycles of an update(): far below 2^52")]
 const fn to_f64(n: usize) -> f64 {
     n as f64
 }
 
-#[expect(clippy::cast_precision_loss, reason = "ciclos de una ventana de medida: muy por debajo de 2^52")]
+#[expect(clippy::cast_precision_loss, reason = "cycles of a measurement window: far below 2^52")]
 const fn to_f64_u64(n: u64) -> f64 {
     n as f64
 }
 
-/// Texto de un multiplicador de velocidad para el slider y las etiquetas:
-/// 2 decimales por debajo de 10 (`0.02`, `1.00`, `2.50`) y ninguno a
-/// partir de ahí (`10`, `1000`).
+/// Text of a speed multiplier for the slider and the labels: 2 decimals below 10 (`0.02`, `1.00`,
+/// `2.50`) and none from there on (`10`, `1000`).
 #[must_use]
 pub fn format_multiplier(multiplier: f64) -> String {
     if multiplier < 9.995 {
@@ -250,11 +236,11 @@ pub fn format_multiplier(multiplier: f64) -> String {
 mod tests {
     use super::*;
 
-    /// Un frame de interfaz a 60 Hz.
+    /// A GUI frame at 60 Hz.
     const FRAME_60HZ: Duration = Duration::from_nanos(16_666_667);
 
-    /// Emulación falsa: emula exactamente lo pedido, más `overshoot`
-    /// ciclos (la última instrucción que no se parte), y cuenta.
+    /// Fake emulation: emulates exactly what is asked, plus `overshoot` cycles (the last
+    /// instruction, which is not split), and counts.
     struct FakeEmu {
         overshoot: usize,
         total: u64,
@@ -274,8 +260,8 @@ mod tests {
         }
     }
 
-    /// `frames` updates seguidos cada `dt` (más el primero, que solo
-    /// pone en marcha el reloj), sin agotar nunca el presupuesto.
+    /// `frames` updates in a row every `dt` (plus the first, which only starts the clock), never
+    /// running out of budget.
     fn run_updates(
         pacer: &mut Pacer,
         emu: &mut FakeEmu,
@@ -303,7 +289,7 @@ mod tests {
 
     #[test]
     fn overshoot_does_not_drift() {
-        // Cada trozo se pasa 30 ciclos: la deuda negativa lo compensa.
+        // Each piece goes over by 30 cycles: the negative debt makes up for it.
         let mut pacer = Pacer::new();
         let mut emu = FakeEmu::new(30);
         run_updates(&mut pacer, &mut emu, Instant::now(), FRAME_60HZ, 600, SpeedMode::Multiplier(1.0));
@@ -314,8 +300,7 @@ mod tests {
 
     #[test]
     fn slow_motion_runs_a_little_every_update() {
-        // 0.02x a 60 Hz: ~433 ciclos por update, en vez de un frame entero
-        // cada 575 ms.
+        // 0.02x at 60 Hz: ~433 cycles per update, instead of a whole frame every 575 ms.
         let mut pacer = Pacer::new();
         let mut emu = FakeEmu::new(0);
         let start = Instant::now();
@@ -340,13 +325,13 @@ mod tests {
         pacer.advance(start, SpeedMode::Multiplier(1.0), || false, |n| emu.run(n));
         pacer.pause();
         let ran = pacer.advance(start + Duration::from_secs(1), SpeedMode::Multiplier(1.0), || false, |n| emu.run(n));
-        assert_eq!(ran, 0, "tras la pausa no se recupera el tiempo parado");
+        assert_eq!(ran, 0, "after the pause the stopped time is not made up");
         assert!(pacer.measurement().is_none());
     }
 
     #[test]
     fn long_gaps_are_capped() {
-        // Ventana minimizada 5 s: solo se deben MAX_DT = 0.1 s.
+        // Window minimized for 5 s: only MAX_DT = 0.1 s is owed.
         let mut pacer = Pacer::new();
         let mut emu = FakeEmu::new(0);
         let start = Instant::now();
@@ -357,8 +342,8 @@ mod tests {
 
     #[test]
     fn owed_time_is_dropped_when_the_host_cannot_keep_up() {
-        // 1000x con un host que solo da para 3 trozos por update: la
-        // deuda no crece de un update a otro.
+        // 1000x with a host that only manages 3 pieces per update: the debt does not grow from one
+        // update to the next.
         let mut pacer = Pacer::new();
         let mut emu = FakeEmu::new(0);
         let mut now = Instant::now();
@@ -377,12 +362,12 @@ mod tests {
                 |n| emu.run(n),
             );
             per_update.push(ran_now);
-            assert!(pacer.debt_ticks.abs() < 1.0, "deuda arrastrada: {}", pacer.debt_ticks);
+            assert!(pacer.debt_ticks.abs() < 1.0, "debt carried over: {}", pacer.debt_ticks);
         }
         assert!(per_update.iter().all(|&r| r == to_u64(3 * CHUNK_TICKS)), "{per_update:?}");
-        let m = pacer.measurement().unwrap_or_else(|| panic!("sin medida"));
+        let m = pacer.measurement().unwrap_or_else(|| panic!("no measurement"));
         assert!(m.host_limited);
-        // 3 frames por cada update de 16.7 ms = 2.7 M ciclos/s = ~2.08x.
+        // 3 frames for each update of 16.7 ms = 2.7 M cycles/s = ~2.08x.
         assert!((m.multiplier - 2.077).abs() < 0.01, "{m:?}");
     }
 
@@ -401,8 +386,8 @@ mod tests {
             },
             |n| emu.run(n),
         );
-        assert_eq!(ran, to_u64(5 * CHUNK_TICKS), "aunque sea el primer update");
-        // Siempre al menos un trozo, aunque el presupuesto ya esté agotado.
+        assert_eq!(ran, to_u64(5 * CHUNK_TICKS), "even if it is the first update");
+        // Always at least one piece, even if the budget has already run out.
         let ran_late = pacer.advance(start + FRAME_60HZ, SpeedMode::Max, || true, |n| emu.run(n));
         assert_eq!(ran_late, to_u64(CHUNK_TICKS));
     }
@@ -413,7 +398,7 @@ mod tests {
         let mut emu = FakeEmu::new(0);
         let start = Instant::now();
         run_updates(&mut pacer, &mut emu, start, FRAME_60HZ, 60, SpeedMode::Multiplier(2.0));
-        let m = pacer.measurement().unwrap_or_else(|| panic!("sin medida"));
+        let m = pacer.measurement().unwrap_or_else(|| panic!("no measurement"));
         assert!((m.multiplier - 2.0).abs() < 0.02, "{m:?}");
         assert!((m.emulated_mhz - 2.6).abs() < 0.03, "{m:?}");
         assert!(!m.host_limited);
@@ -429,7 +414,7 @@ mod tests {
         assert_budget_ms(1.0 / 60.0, false, 10.0);
         assert_budget_ms(1.0 / 60.0, true, 25.0);
         assert_budget_ms(1.0 / 144.0, false, 0.6 * 1000.0 / 144.0);
-        // Monitores lentísimos o dt absurdos: acotado.
+        // Very slow monitors or absurd dt values: bounded.
         assert_budget_ms(1.0, false, 20.0);
         assert_budget_ms(1.0, true, 25.0);
         assert_budget_ms(0.0, false, 2.5);

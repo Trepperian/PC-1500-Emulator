@@ -1,22 +1,17 @@
-//! Pintado del LCD de la PC-1500 como un LCD STN gris de verdad: cristal
-//! gris verdoso con un ligero degradado, puntos casi negros con su sombra
-//! sobre el fondo (el grosor del cristal), "fantasmas" opcionales de los
-//! puntos apagados y los indicadores ("annunciators") DENTRO del cristal,
-//! encima de la matriz, en las mismas posiciones y con los mismos colores
-//! que en la máquina real.
+//! Painting the PC-1500's LCD as a real grey STN LCD: a greenish grey glass with a slight gradient,
+//! almost black dots with their shadow on the background (the glass's thickness), optional "ghosts"
+//! of the unlit dots, and the indicators ("annunciators") INSIDE the glass, above the matrix, in
+//! the same positions and with the same colors as on the real machine.
 //!
-//! Antes la GUI creaba cada frame una textura RGBA en blanco y negro puro
-//! a partir de `DisplayController::rgba_buffer` y escribía los
-//! indicadores como etiquetas normales de egui en una fila aparte, fuera
-//! del LCD (con nombres que no son los de la máquina: "SML", "DEG",
-//! "RSV"...). Ahora todo se pinta de forma procedural a partir de las 156
-//! columnas de `DisplayController::columns`, sin texturas: un único
-//! `Mesh` por capa (fantasmas, sombras, puntos encendidos), así que el
-//! coste es despreciable incluso a velocidad máxima.
+//! The GUI used to create every frame an RGBA texture in pure black and white from
+//! `DisplayController::rgba_buffer` and wrote the indicators as normal egui labels in a separate
+//! row, outside the LCD (with names that are not the machine's: "SML", "DEG", "RSV"...). Now
+//! everything is painted procedurally from the 156 columns of `DisplayController::columns`, without
+//! textures: a single `Mesh` per layer (ghosts, shadows, lit dots), so the cost is negligible even
+//! at maximum speed.
 //!
-//! La geometría de los indicadores sale de las medidas de la máquina real
-//! (re-expresadas aquí en nuestra propia tabla, ver [`ANNUNCIATORS`]); la
-//! tipografía de 3x5 celdas es propia (ver [`glyph`]).
+//! The geometry of the indicators comes from the real machine's measurements (expressed again here
+//! in our own table, see [`ANNUNCIATORS`]); the 3x5-cell type is our own (see [`glyph`]).
 
 use std::sync::OnceLock;
 
@@ -26,31 +21,28 @@ use eframe::egui::{
     pos2, vec2,
 };
 
-/// Lo que hay que pintar del LCD en un repintado: una instantánea de
-/// `DisplayController` tomada una sola vez por actualización del
-/// emulador (ver `Pc1500App::update_emulator`).
+/// What has to be painted of the LCD in a repaint: a snapshot of `DisplayController` taken only
+/// once per update of the emulator (see `Pc1500App::update_emulator`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LcdFrame {
-    /// Si el LCD se ve encendido (`DisplayController::is_on`). Apagado, no
-    /// se pinta ningún punto ni indicador encendido (los fantasmas sí,
-    /// porque los segmentos físicos se siguen viendo un poco).
+    /// Whether the LCD shows lit (`DisplayController::is_on`). Off, no lit dot or indicator is
+    /// painted (the ghosts are, because the physical segments can still be seen a little).
     pub on: bool,
-    /// Las 156 columnas (bit 0 = fila superior), ver
-    /// `DisplayController::columns`.
+    /// The 156 columns (bit 0 = top row), see `DisplayController::columns`.
     pub columns: [u8; DISPLAY_WIDTH],
-    /// Estado de cada indicador, indexado por `Symbol as usize`.
+    /// State of each indicator, indexed by `Symbol as usize`.
     pub symbols: [bool; SYMBOL_COUNT],
 }
 
 impl LcdFrame {
-    /// LCD apagado y vacío (antes del primer frame emulado).
+    /// LCD off and empty (before the first emulated frame).
     pub const BLANK: Self = Self {
         on: false,
         columns: [0; DISPLAY_WIDTH],
         symbols: [false; SYMBOL_COUNT],
     };
 
-    /// Copia lo que se ve ahora mismo en `display`.
+    /// Copies what `display` shows right now.
     #[must_use]
     pub fn from_display(display: &DisplayController) -> Self {
         Self {
@@ -60,13 +52,13 @@ impl LcdFrame {
         }
     }
 
-    /// `true` si el punto (`x`, `y`) se ve encendido.
+    /// `true` if the dot (`x`, `y`) shows lit.
     #[must_use]
     pub fn pixel(&self, x: usize, y: usize) -> bool {
         self.on && y < DISPLAY_HEIGHT && self.columns.get(x).is_some_and(|&c| (c >> y) & 1 != 0)
     }
 
-    /// `true` si el indicador `symbol` se ve encendido.
+    /// `true` if the indicator `symbol` shows lit.
     #[must_use]
     pub const fn symbol(&self, symbol: Symbol) -> bool {
         self.on && self.symbols[symbol as usize]
@@ -79,24 +71,23 @@ impl Default for LcdFrame {
     }
 }
 
-/// Colores del LCD.
+/// Colors of the LCD.
 #[derive(Clone, Copy, Debug)]
 pub struct LcdPalette {
-    /// Fondo del cristal arriba y abajo (degradado vertical).
+    /// Background of the glass at the top and at the bottom (vertical gradient).
     pub glass_top: Color32,
     pub glass_bottom: Color32,
-    /// Punto o indicador encendido.
+    /// Lit dot or indicator.
     pub on: Color32,
-    /// Punto o indicador apagado, apenas visible ("fantasma").
+    /// Unlit dot or indicator, barely visible ("ghost").
     pub ghost: Color32,
-    /// Sombra que proyecta cada punto encendido sobre el fondo, por el
-    /// grosor del cristal.
+    /// Shadow that each lit dot casts on the background, because of the glass's thickness.
     pub shadow: Color32,
-    /// Marco plateado alrededor del cristal.
+    /// Silver frame around the glass.
     pub frame: Color32,
 }
 
-/// La paleta de un LCD STN gris como el de la PC-1500.
+/// The palette of a grey STN LCD like the PC-1500's.
 pub const STN_GREY: LcdPalette = LcdPalette {
     glass_top: Color32::from_rgb(0xB2, 0xBB, 0xA8),
     glass_bottom: Color32::from_rgb(0xA1, 0xAB, 0x97),
@@ -106,57 +97,53 @@ pub const STN_GREY: LcdPalette = LcdPalette {
     frame: Color32::from_rgb(0xB9, 0xBD, 0xBB),
 };
 
-/// Línea oscura en los bordes superior e izquierdo del cristal, para dar
-/// sensación de profundidad.
+/// Dark line on the top and left edges of the glass, to give a sense of depth.
 const GLASS_INNER_EDGE: Color32 = Color32::from_rgba_unmultiplied_const(0, 0, 0, 60);
 
-/// Fracción del paso de la rejilla que ocupa cada punto (el resto es la
-/// separación entre puntos).
+/// Fraction of the grid's pitch that each dot takes (the rest is the gap between dots).
 const DOT_FILL: f32 = 0.86;
 
-/// Desplazamiento de la sombra de cada punto, en fracción del paso.
+/// Offset of each dot's shadow, as a fraction of the pitch.
 const SHADOW_OFFSET: f32 = 0.22;
 
-/// Distancia (en pasos) desde el borde superior de la matriz hasta el
-/// borde superior de la banda de indicadores. Medido sobre la máquina
-/// real: la banda de indicadores está 8 unidades por encima de la matriz
-/// con un paso de 2.36 unidades.
+/// Distance (in pitches) from the top edge of the matrix to the top edge of the band of indicators.
+/// Measured on the real machine: the band of indicators is 8 units above the matrix with a pitch of
+/// 2.36 units.
 const BAND_TOP: f32 = 3.4;
 
-/// Filas de la tipografía de los indicadores.
+/// Rows of the indicators' type.
 const GLYPH_ROWS: u8 = 5;
 
-/// Margen del cristal alrededor de matriz e indicadores en
-/// [`LcdGeometry::fit`], en pasos: izquierda, derecha, arriba (sobre la
-/// banda de indicadores) y abajo.
+/// Margin of the glass around matrix and indicators in [`LcdGeometry::fit`], in pitches: left,
+/// right, top (above the band of indicators) and bottom.
 const GLASS_MARGIN_LEFT: f32 = 3.0;
 const GLASS_MARGIN_RIGHT: f32 = 3.0;
 const GLASS_MARGIN_TOP: f32 = 1.6;
 const GLASS_MARGIN_BOTTOM: f32 = 2.5;
 
-/// Ancho total, en pasos, que ocupan matriz e indicadores: el indicador
-/// de pila (`BATTERY`) empieza en la media celda 314 y mide 4, es decir
-/// llega al paso 159, más allá del final de la matriz (156).
+/// Total width, in pitches, that matrix and indicators take: the battery indicator (`BATTERY`)
+/// starts at half cell 314 and is 4 wide, that is, it reaches pitch 159, beyond the end of the
+/// matrix (156).
 const CONTENT_WIDTH: f32 = 159.0;
 
-/// Tamaño del LCD en [`LcdGeometry::fit`], en pasos.
+/// Size of the LCD in [`LcdGeometry::fit`], in pitches.
 const FIT_WIDTH: f32 = GLASS_MARGIN_LEFT + CONTENT_WIDTH + GLASS_MARGIN_RIGHT;
 const FIT_HEIGHT: f32 = GLASS_MARGIN_TOP + BAND_TOP + 7.0 + GLASS_MARGIN_BOTTOM;
 
-/// Dónde se pinta el LCD, en puntos lógicos de egui.
+/// Where the LCD is painted, in egui's logical points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LcdGeometry {
-    /// Rectángulo del cristal (el marco se pinta justo por fuera).
+    /// Rectangle of the glass (the frame is painted just outside).
     pub glass: Rect,
-    /// Esquina superior izquierda nominal de la matriz de 156x7.
+    /// Nominal top left corner of the 156x7 matrix.
     pub matrix_origin: Pos2,
-    /// Distancia nominal entre puntos consecutivos.
+    /// Nominal distance between consecutive dots.
     pub pitch: f32,
 }
 
 impl LcdGeometry {
-    /// Geometría de un LCD "suelto" que ocupa exactamente `rect` (de
-    /// proporciones [`LcdGeometry::fit_size`]).
+    /// Geometry of a "standalone" LCD that takes exactly `rect` (of the proportions of
+    /// [`LcdGeometry::fit_size`]).
     #[must_use]
     pub fn fit(rect: Rect) -> Self {
         let pitch = (rect.width() / FIT_WIDTH).min(rect.height() / FIT_HEIGHT);
@@ -167,31 +154,29 @@ impl LcdGeometry {
         Self { glass, matrix_origin, pitch }
     }
 
-    /// Tamaño del LCD suelto de [`LcdGeometry::fit`] para un paso dado.
+    /// Size of the standalone LCD of [`LcdGeometry::fit`] for a given pitch.
     #[must_use]
     pub fn fit_size(pitch: f32) -> Vec2 {
         vec2(FIT_WIDTH * pitch, FIT_HEIGHT * pitch)
     }
 }
 
-/// Rejilla de la matriz ajustada a píxeles físicos, en puntos lógicos.
+/// Grid of the matrix fitted to physical pixels, in logical points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Grid {
-    /// Esquina superior izquierda real de la matriz (ya centrada y
-    /// alineada a píxel físico).
+    /// Real top left corner of the matrix (already centered and aligned to the physical pixel).
     origin: Pos2,
-    /// Paso real entre puntos.
+    /// Real pitch between dots.
     pitch: f32,
-    /// Lado de cada punto.
+    /// Side of each dot.
     dot: f32,
 }
 
-/// Ajusta la rejilla a píxeles físicos para que los puntos no "tiemblen"
-/// (unos de un píxel más que otros) a escalas fraccionarias: paso entero
-/// en píxeles físicos (mínimo 2, para que siempre haya separación),
-/// punto de [`DOT_FILL`] del paso (mínimo 1 píxel y siempre al menos 1
-/// píxel de separación), y la matriz resultante centrada dentro del
-/// rectángulo nominal de `156 × pitch` por `7 × pitch`.
+/// Fits the grid to physical pixels so that the dots do not "wobble" (some a pixel bigger than
+/// others) at fractional scales: a whole pitch in physical pixels (at least 2, so that there is
+/// always a gap), a dot of [`DOT_FILL`] of the pitch (at least 1 pixel and always at least 1 pixel
+/// of gap), and the resulting matrix centered inside the nominal rectangle of `156 × pitch` by
+/// `7 × pitch`.
 fn snap_grid(origin: Pos2, pitch: f32, ppp: f32) -> Grid {
     let pitch_px = (pitch * ppp).floor().max(2.0);
     let dot_px = (pitch_px * DOT_FILL).round().clamp(1.0, pitch_px - 1.0);
@@ -208,14 +193,13 @@ fn snap_grid(origin: Pos2, pitch: f32, ppp: f32) -> Grid {
     }
 }
 
-/// Redondea una coordenada al píxel físico más cercano.
+/// Rounds a coordinate to the nearest physical pixel.
 fn snap(v: f32, ppp: f32) -> f32 {
     (v * ppp).round() / ppp
 }
 
-/// Un glifo de la tipografía de los indicadores: `width` celdas de ancho
-/// y 5 filas; cada fila es una máscara de bits con el bit más
-/// significativo (de los `width`) a la izquierda.
+/// A glyph of the indicators' type: `width` cells wide and 5 rows; each row is a bit mask with the
+/// most significant bit (of the `width`) on the left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Glyph {
     width: u8,
@@ -226,9 +210,8 @@ const fn g3(rows: [u8; 5]) -> Glyph {
     Glyph { width: 3, rows }
 }
 
-/// Tipografía propia de 3x5 celdas (algunas letras más anchas), diseñada
-/// para estos indicadores — NO es la de `PockEmul` (GPL). Solo incluye las
-/// letras que hacen falta; cualquier otra es un hueco.
+/// Our own type of 3x5 cells (some letters wider), designed for these indicators — it is NOT
+/// `PockEmul`'s (GPL). It only includes the letters needed; any other is a gap.
 const fn glyph(c: u8) -> Glyph {
     match c {
         b'A' => g3([0b010, 0b101, 0b111, 0b101, 0b101]),
@@ -238,7 +221,7 @@ const fn glyph(c: u8) -> Glyph {
         b'F' => g3([0b111, 0b100, 0b110, 0b100, 0b100]),
         b'G' => Glyph { width: 4, rows: [0b0111, 0b1000, 0b1011, 0b1001, 0b0110] },
         b'H' => g3([0b101, 0b101, 0b111, 0b101, 0b101]),
-        // La "I" dentro de una palabra (SHIFT) es un simple palo.
+        // The "I" inside a word (SHIFT) is a plain stroke.
         b'I' => Glyph { width: 1, rows: [1, 1, 1, 1, 1] },
         b'K' => g3([0b101, 0b101, 0b110, 0b101, 0b101]),
         b'L' => g3([0b100, 0b100, 0b100, 0b100, 0b111]),
@@ -256,45 +239,40 @@ const fn glyph(c: u8) -> Glyph {
     }
 }
 
-/// Números romanos de los niveles de RESERVE, con sus barras de remate
-/// arriba y abajo.
+/// Roman numerals of the RESERVE levels, with their serif bars above and below.
 const ROMAN_I: Glyph = g3([0b111, 0b010, 0b010, 0b010, 0b111]);
 const ROMAN_II: Glyph = Glyph { width: 5, rows: [0b11111, 0b01010, 0b01010, 0b01010, 0b11111] };
 const ROMAN_III: Glyph = Glyph {
     width: 7,
     rows: [0b111_1111, 0b010_1010, 0b010_1010, 0b010_1010, 0b111_1111],
 };
-/// Símbolo de pila.
+/// Battery symbol.
 const BATTERY: Glyph = Glyph { width: 4, rows: [0b0110, 0b1111, 0b1001, 0b1001, 0b1111] };
 
-/// Cómo se dibuja un indicador.
+/// How an indicator is drawn.
 #[derive(Clone, Copy, Debug)]
 enum Label {
-    /// Una palabra con la tipografía de [`glyph`], una celda en blanco
-    /// entre letras.
+    /// A word with the type of [`glyph`], a blank cell between letters.
     Word(&'static str),
-    /// Un único glifo especial.
+    /// A single special glyph.
     Glyph(Glyph),
 }
 
-/// Un indicador: qué símbolo es, dónde empieza (en medias celdas = medios
-/// pasos de la matriz, desde su borde izquierdo), cómo se dibuja y si su
-/// fantasma se muestra.
+/// An indicator: which symbol it is, where it starts (in half cells = half pitches of the matrix,
+/// from its left edge), how it is drawn and whether its ghost shows.
 #[derive(Clone, Copy, Debug)]
 struct Annunciator {
     symbol: Symbol,
     x: u16,
     label: Label,
-    /// `false` para los segmentos que este modelo nunca enciende (KANA en
-    /// el modelo de exportación, que es el emulado; la pila, que no
-    /// emulamos): se pintan solo encendidos, nunca como fantasma, para no
-    /// enseñar un segmento que el usuario no reconocería.
+    /// `false` for the segments this model never lights (KANA on the export model, which is the one
+    /// emulated; the battery, which we do not emulate): they are painted only when lit, never as a
+    /// ghost, so as not to show a segment the user would not recognize.
     ghost: bool,
 }
 
-/// Los 15 indicadores en su posición real. `DE`, `G` y `RAD` van pegados
-/// (una celda de separación) para leerse como "DEG" (`DE`+`G`), "RAD" o
-/// "GRAD" (`G`+`RAD`), como en la máquina.
+/// The 15 indicators in their real position. `DE`, `G` and `RAD` go together (one cell of gap) to
+/// read as "DEG" (`DE`+`G`), "RAD" or "GRAD" (`G`+`RAD`), as on the machine.
 const ANNUNCIATORS: [Annunciator; SYMBOL_COUNT] = [
     ann(Symbol::Busy, 2, Label::Word("BUSY")),
     ann(Symbol::Shift, 32, Label::Word("SHIFT")),
@@ -317,8 +295,8 @@ const fn ann(symbol: Symbol, x: u16, label: Label) -> Annunciator {
     Annunciator { symbol, x, label, ghost: true }
 }
 
-/// Celdas encendidas `(x, y)` de un indicador, relativas a su esquina
-/// superior izquierda, y su ancho total en celdas.
+/// Lit cells `(x, y)` of an indicator, relative to its top left corner, and its total width in
+/// cells.
 fn label_cells(label: Label) -> (Vec<(u16, u8)>, u16) {
     let glyphs: Vec<Glyph> = match label {
         Label::Word(word) => word.bytes().map(glyph).collect(),
@@ -342,9 +320,8 @@ fn label_cells(label: Label) -> (Vec<(u16, u8)>, u16) {
     (cells, x0)
 }
 
-/// Celdas de cada indicador de [`ANNUNCIATORS`], ya en coordenadas de
-/// banda (medias celdas desde el borde izquierdo de la matriz),
-/// calculadas una sola vez.
+/// Cells of each indicator of [`ANNUNCIATORS`], already in band coordinates (half cells from the
+/// matrix's left edge), worked out only once.
 fn annunciator_cells() -> &'static [Vec<(u16, u8)>; SYMBOL_COUNT] {
     static CELLS: OnceLock<[Vec<(u16, u8)>; SYMBOL_COUNT]> = OnceLock::new();
     CELLS.get_or_init(|| {
@@ -358,8 +335,8 @@ fn annunciator_cells() -> &'static [Vec<(u16, u8)>; SYMBOL_COUNT] {
     })
 }
 
-/// Pinta el LCD entero (cristal, matriz e indicadores) en `geometry`.
-/// `ghost` activa los fantasmas de los puntos e indicadores apagados.
+/// Paints the whole LCD (glass, matrix and indicators) in `geometry`. `ghost` turns on the ghosts
+/// of the unlit dots and indicators.
 pub fn paint(painter: &Painter, geometry: &LcdGeometry, frame: &LcdFrame, pal: &LcdPalette, ghost: bool) {
     let ppp = painter.pixels_per_point();
     paint_glass(painter, geometry.glass, pal);
@@ -382,14 +359,13 @@ pub fn paint(painter: &Painter, geometry: &LcdGeometry, frame: &LcdFrame, pal: &
             } else if ghost {
                 ghost_mesh.add_colored_rect(Rect::from_min_size(min, dot), pal.ghost);
             } else {
-                // Apagado y sin fantasmas: solo se ve el cristal.
+                // Off and without ghosts: only the glass shows.
             }
         }
     }
 
-    // Indicadores: celdas de medio paso, pegadas unas a otras (son
-    // segmentos impresos macizos, no puntos), con sus bordes alineados a
-    // píxel físico para que no queden huecos ni solapes.
+    // Indicators: cells of half a pitch, next to each other (they are solid printed segments, not
+    // dots), with their edges aligned to the physical pixel so that there are no gaps or overlaps.
     let cell = grid.pitch / 2.0;
     let band_top = BAND_TOP.mul_add(-grid.pitch, grid.origin.y);
     let cell_rect = |x: u16, y: u8| {
@@ -410,7 +386,7 @@ pub fn paint(painter: &Painter, geometry: &LcdGeometry, frame: &LcdFrame, pal: &
             } else if ghost && a.ghost {
                 ghost_mesh.add_colored_rect(rect, pal.ghost);
             } else {
-                // Apagado y sin fantasma: no se pinta nada.
+                // Off and without a ghost: nothing is painted.
             }
         }
     }
@@ -422,8 +398,7 @@ pub fn paint(painter: &Painter, geometry: &LcdGeometry, frame: &LcdFrame, pal: &
     }
 }
 
-/// Cristal: degradado vertical, marco plateado y una línea oscura arriba
-/// y a la izquierda para dar profundidad.
+/// Glass: vertical gradient, silver frame and a dark line at the top and on the left to give depth.
 fn paint_glass(painter: &Painter, glass: Rect, pal: &LcdPalette) {
     let mut mesh = Mesh::default();
     mesh.colored_vertex(glass.left_top(), pal.glass_top);
@@ -441,8 +416,8 @@ fn paint_glass(painter: &Painter, glass: Rect, pal: &LcdPalette) {
     painter.rect_stroke(glass, CornerRadius::ZERO, Stroke::new(1.0, pal.frame), StrokeKind::Outside);
 }
 
-/// Reserva en `ui` un LCD suelto de `pitch` puntos por paso (o menos, si
-/// no cabe a lo ancho) y lo pinta con [`STN_GREY`].
+/// Reserves in `ui` a standalone LCD of `pitch` points per pitch (or less, if it does not fit
+/// across) and paints it with [`STN_GREY`].
 pub fn show(ui: &mut Ui, frame: &LcdFrame, ghost: bool, pitch: f32) -> Response {
     let pitch = pitch.min(ui.available_width() / FIT_WIDTH).max(1.0);
     let (rect, response) = ui.allocate_exact_size(LcdGeometry::fit_size(pitch), Sense::hover());
@@ -488,10 +463,10 @@ mod tests {
     fn annunciators_do_not_overlap_and_fit_the_band() {
         let mut previous_end = 0;
         for a in &ANNUNCIATORS {
-            assert!(a.x >= previous_end, "{:?} solapa con el anterior", a.symbol);
+            assert!(a.x >= previous_end, "{:?} overlaps the previous one", a.symbol);
             previous_end = a.x + width_of(a.label);
         }
-        // `CONTENT_WIDTH` pasos = el doble en medias celdas.
+        // `CONTENT_WIDTH` pitches = twice as many half cells.
         assert!(f32::from(previous_end) <= CONTENT_WIDTH * 2.0);
     }
 
@@ -509,7 +484,7 @@ mod tests {
     fn glyph_cells_follow_the_bitmaps() {
         let (cells, width) = label_cells(Label::Word("DE"));
         assert_eq!(width, 7);
-        // D: 110 / 101 / 101 / 101 / 110 y E desde la columna 4.
+        // D: 110 / 101 / 101 / 101 / 110 and E from column 4.
         assert!(cells.contains(&(0, 0)) && cells.contains(&(1, 0)) && !cells.contains(&(2, 0)));
         assert!(cells.contains(&(2, 1)) && !cells.contains(&(3, 1)));
         assert!(cells.contains(&(4, 0)) && cells.contains(&(6, 0)) && cells.contains(&(6, 4)));
@@ -523,12 +498,12 @@ mod tests {
                 let grid = snap_grid(pos2(10.3, 20.7), pitch, ppp);
                 let pitch_px = grid.pitch * ppp;
                 let dot_px = grid.dot * ppp;
-                assert!((pitch_px - pitch_px.round()).abs() < 1e-4, "paso {pitch_px} px");
+                assert!((pitch_px - pitch_px.round()).abs() < 1e-4, "pitch {pitch_px} px");
                 assert!((dot_px - dot_px.round()).abs() < 1e-4, "punto {dot_px} px");
                 assert!(pitch_px >= 2.0 && dot_px >= 1.0 && dot_px < pitch_px);
                 assert!(grid.pitch <= pitch.max(2.0 / ppp));
                 let ox = grid.origin.x * ppp;
-                assert!((ox - ox.round()).abs() < 1e-3, "origen {ox} px");
+                assert!((ox - ox.round()).abs() < 1e-3, "origin {ox} px");
             }
         }
     }
@@ -537,7 +512,7 @@ mod tests {
     fn grid_is_centered_in_the_nominal_rect() {
         let grid = snap_grid(pos2(0.0, 0.0), 6.5, 1.0);
         assert!((grid.pitch - 6.0).abs() < 1e-6);
-        // 156 × 0.5 / 2 = 39 puntos de holgura a cada lado.
+        // 156 × 0.5 / 2 = 39 points of slack on each side.
         assert!((grid.origin.x - 39.0).abs() <= 0.5);
     }
 

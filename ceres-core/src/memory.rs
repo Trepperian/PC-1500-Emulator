@@ -4,14 +4,11 @@ pub(crate) const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
 const INITIAL_VALUE: u8 = 0xFF;
 
-/// Si es `true`, cada lectura o escritura a una dirección no mapeada se
-/// anuncia por `stdout`. Apagado por defecto: el arranque en frío de la
-/// ROM sondea a propósito memoria que no existe (RAM en $0000/$4800,
-/// ROMs de expansión en $8000-$B800, periféricos CE-150/CE-158 en
-/// $1B00A/$1B00B/$1DC00...) y esos ~30 mensajes por arranque solo
-/// ensuciaban la salida de la GUI y de los tests, además de escribir en
-/// `stdout` (bloqueante) desde el bucle caliente de la CPU. Ponerlo a
-/// `true` solo para depurar el mapa de memoria.
+/// If `true`, every read or write of an unmapped address is announced on `stdout`. Off by default:
+/// the ROM's cold start probes memory that does not exist on purpose (RAM at $0000/$4800, expansion
+/// ROMs at $8000-$B800, CE-150/CE-158 peripherals at $1B00A/$1B00B/$1DC00...), and those ~30
+/// messages per boot only cluttered the output of the GUI and of the tests, besides writing to
+/// `stdout` (which blocks) from the CPU's hot loop. Set it to `true` only to debug the memory map.
 const LOG_UNMAPPED: bool = false;
 
 // The RAM expansions modelled, each one replacing the one before (they
@@ -185,9 +182,8 @@ impl Pc1500 {
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize]
             }
             ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
-            // La tabla virtual de `CLOAD`/`CSAVE`/`MERGE`/`CHAIN`, solo
-            // con `PV`=0 (ver `host_io.rs`). Es de solo lectura: las
-            // escrituras caen en el brazo "no mapeado" de `write_byte`.
+            // The virtual table of `CLOAD`/`CSAVE`/`MERGE`/`CHAIN`, only with `PV`=0 (see
+            // `host_io.rs`). It is read-only: writes fall into the "unmapped" arm of `write_byte`.
             host_io::TABLE_BEGIN..=host_io::TABLE_END if !self.lh5801.pv() => {
                 host_io::rom_byte(addr)
             }
@@ -201,17 +197,14 @@ impl Pc1500 {
         }
     }
 
-    /// Un byte de la ventana de expansión de ME0 ($8000-$BFFF) como lo
-    /// vería la CPU con el `PV` dado, tenga el que tenga ahora (fuera de
-    /// esa ventana, el de [`Pc1500::read_byte`]).
+    /// A byte of ME0's expansion window ($8000-$BFFF) as the CPU would see it with the given `PV`,
+    /// whatever it has now (outside that window, the one of [`Pc1500::read_byte`]).
     ///
-    /// `PV` (patilla del LH5801) elige entre dos bancos de ROMs de
-    /// expansión en esa ventana: la CE-150 usa `PV`=0 $A000-$BFFF y la
-    /// CE-158 `PV`=1 $8000-$9FFF. El emulador solo pone ahí la tabla
-    /// virtual de `host_io.rs` ($9800-$9FFF con `PV`=0); lo demás se lee
-    /// vacío ($FF), como sin nada enchufado. Lo usa el lector de tablas
-    /// de palabras clave de `basic.rs`, que tiene que recorrer los dos
-    /// bancos como el tokenizador de la ROM sin cambiar el `PV` real.
+    /// `PV` (an LH5801 pin) picks one of two banks of expansion ROMs in that window: the CE-150
+    /// uses `PV`=0 $A000-$BFFF and the CE-158 `PV`=1 $8000-$9FFF. The emulator only puts there the
+    /// virtual table of `host_io.rs` ($9800-$9FFF with `PV`=0); the rest reads empty ($FF), as with
+    /// nothing plugged in. It is used by the keyword table reader of `basic.rs`, which has to walk
+    /// both banks as the ROM's tokenizer does without changing the real `PV`.
     pub(crate) fn read_banked(&self, addr: u16, pv: bool) -> u8 {
         let wide = u32::from(addr);
         if !(0x8000..0xC000).contains(&wide) {

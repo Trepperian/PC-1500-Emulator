@@ -1,60 +1,48 @@
-//! Arnés "headless" (sin GUI) para manejar una [`Pc1500`] completa desde
-//! código: arrancar la ROM real hasta el prompt de BASIC, pulsar teclas
-//! durante un número exacto de frames emulados, teclear texto ASCII
-//! convirtiéndolo a la secuencia de teclas físicas de la PC-1500 (con
-//! `SHIFT` donde haga falta) y leer de vuelta lo que muestra el LCD como
-//! texto.
+//! "Headless" harness (no GUI) to drive a whole [`Pc1500`] from code: boot the real ROM up to
+//! BASIC's prompt, press keys for an exact number of emulated frames, type ASCII text by turning it
+//! into the sequence of the PC-1500's physical keys (with `SHIFT` where needed) and read back what
+//! the LCD shows as text.
 //!
-//! Existe para poder verificar automáticamente (`cargo test`) cualquier
-//! funcionalidad nueva del emulador — BREAK, TIME, carga/guardado de
-//! programas, mapeo de teclado... — contra el comportamiento de la ROM
-//! auténtica, en vez de tener que comprobarlo a mano en la GUI. Las
-//! piezas que no dependen de los tests (p. ej. [`text_to_keystrokes`],
-//! útil para "pegar" texto en la GUI) son públicas a propósito.
+//! It exists to check automatically (`cargo test`) any new feature of the emulator — BREAK, TIME,
+//! loading and saving programs, keyboard mapping... — against the behaviour of the authentic ROM,
+//! instead of having to check it by hand in the GUI. The pieces that do not depend on the tests
+//! (e.g. [`text_to_keystrokes`], useful to "paste" text in the GUI) are public on purpose.
 //!
-//! # Tiempos
-//! Todo se mide en llamadas a [`Pc1500::step_frame`] ("frames"), no en
-//! tiempo de host: un frame equivale siempre a [`crate::FRAME_DURATION`]
-//! (~11.5 ms) de tiempo emulado, así que estos números son deterministas
-//! e independientes de lo rápido que sea el ordenador que ejecuta los
-//! tests. Ver [`KEY_HOLD_FRAMES`] y [`KEY_RELEASE_FRAMES`] para cómo se
-//! midieron los mínimos.
+//! # Timing
+//! Everything is measured in calls to [`Pc1500::step_frame`] ("frames"), not in host time: a frame
+//! is always [`crate::FRAME_DURATION`] (~11.5 ms) of emulated time, so these numbers are
+//! deterministic and independent of how fast the computer running the tests is. See
+//! [`KEY_HOLD_FRAMES`] and [`KEY_RELEASE_FRAMES`] for how the minimums were measured.
 //!
-//! # Reloj (`TIME`)
-//! [`Pc1500::new`] arranca el reloj `µPD1990AC` con la hora local del host,
-//! que avanza en tiempo real: lo que quiere la GUI, pero no un test (lo
-//! que lea `TIME`, y la semilla de `RANDOM`, dependerían de cuándo y a
-//! qué velocidad se ejecuta). Los tests deben crear la máquina con
-//! [`Pc1500::new_deterministic`] (reloj fijo en [`HARNESS_RTC_START`]
-//! que avanza con los ciclos emulados), o elegir otra hora con
-//! [`Pc1500::set_rtc_time_base`] justo después de [`Pc1500::new`].
+//! # Clock (`TIME`)
+//! [`Pc1500::new`] starts the `µPD1990AC` clock at the host's local time, which moves on in real
+//! time: what the GUI wants, but not a test (what `TIME` reads, and the seed of `RANDOM`, would
+//! depend on when and at what speed it runs). Tests must create the machine with
+//! [`Pc1500::new_deterministic`] (a clock fixed at [`HARNESS_RTC_START`] that moves on with the
+//! emulated cycles), or choose another time with [`Pc1500::set_rtc_time_base`] right after
+//! [`Pc1500::new`].
 //!
-//! # Encendido y auto-apagado
-//! La tecla `OFF` y el auto-apagado de la ROM (tras ~5 minutos emulados
-//! esperando teclado sin que se pulse nada) apagan la máquina de verdad:
-//! [`Pc1500::is_powered_on`] pasa a `false`, la CPU deja de ejecutar y
-//! las funciones que esperan a la ROM ([`Pc1500::run_until_idle`],
-//! [`Pc1500::enter_line`]...) ya no terminan. [`Pc1500::power_on`] la
-//! vuelve a encender. Un test que deje correr la máquina ociosa mucho
-//! rato (más de ~25000 frames) debe desactivarlo antes con
-//! [`Pc1500::set_auto_power_off`]`(false)`.
+//! # Power and automatic power-off
+//! The `OFF` key and the ROM's automatic power-off (after ~5 emulated minutes waiting for the
+//! keyboard without anything pressed) really switch the machine off: [`Pc1500::is_powered_on`]
+//! becomes `false`, the CPU stops running and the functions that wait for the ROM
+//! ([`Pc1500::run_until_idle`], [`Pc1500::enter_line`]...) no longer end. [`Pc1500::power_on`]
+//! switches it on again. A test that leaves the machine idle for a long time (more than ~25000
+//! frames) must disable it first with [`Pc1500::set_auto_power_off`]`(false)`.
 //!
-//! # Teclear líneas enteras
-//! Para introducir líneas de programa o comandos uno detrás de otro hay
-//! que usar [`Pc1500::enter_line`] / [`Pc1500::enter_lines`], no
-//! [`Pc1500::type_text`] + [`Pc1500::run_until_idle`]: que la ROM esté
-//! ociosa en `WAIT_4_KB` no significa que vaya a aceptar la siguiente
-//! tecla. Ver [`Pc1500::is_ready_for_key`] para la causa exacta (el
-//! "antirrebote de suelta" del bit 0 de `CURS_CTRL`).
+//! # Typing whole lines
+//! To enter program lines or commands one after another, use [`Pc1500::enter_line`] /
+//! [`Pc1500::enter_lines`], not [`Pc1500::type_text`] + [`Pc1500::run_until_idle`]: the ROM being
+//! idle in `WAIT_4_KB` does not mean it will take the next key. See [`Pc1500::is_ready_for_key`]
+//! for the exact cause (the "release debounce" of bit 0 of `CURS_CTRL`).
 
 use core::{array, error::Error, fmt};
 
 use crate::{Key, Pc1500, RtcDateTime, RtcTimeBase, display::DISPLAY_WIDTH};
 
-/// Hora a la que arranca el reloj de [`Pc1500::new_deterministic`]: el
-/// 1 de enero a las 12:00:00, domingo (día de la semana 0). Lejos de
-/// cualquier cambio de día para que un test que no mire el reloj nunca
-/// vea pasar nada raro.
+/// Time at which the clock of [`Pc1500::new_deterministic`] starts: January 1 at 12:00:00, a Sunday
+/// (day of the week 0). Far from any change of day, so that a test that does not look at the clock
+/// never sees anything odd happen.
 pub const HARNESS_RTC_START: RtcDateTime = RtcDateTime {
     month: 1,
     day: 1,
@@ -64,107 +52,89 @@ pub const HARNESS_RTC_START: RtcDateTime = RtcDateTime {
     weekday: 0,
 };
 
-/// Número de caracteres que caben en el LCD de la PC-1500: 156 columnas
-/// de píxeles / 6 columnas por carácter (5 de glifo + 1 de separación).
+/// Number of characters that fit on the PC-1500's LCD: 156 columns of pixels / 6 columns per
+/// character (5 of glyph + 1 of spacing).
 pub const LCD_CHARS: usize = 26;
 
-/// Columnas de píxeles que ocupa cada carácter en el LCD: 5 columnas de
-/// glifo (la matriz 5x7 de la ROM) seguidas de 1 columna vacía de
-/// separación. Comprobado sobre el mensaje de arranque en frío
-/// `NEW0? :CHECK`, cuya "N" ocupa exactamente las columnas 0-4.
+/// Columns of pixels each character takes on the LCD: 5 columns of glyph (the ROM's 5x7 matrix)
+/// followed by 1 empty column of spacing. Checked on the cold start message `NEW0? :CHECK`, whose
+/// "N" takes exactly columns 0-4.
 pub const LCD_CELL_WIDTH: usize = 6;
 
-/// Frames que hay que mantener pulsada una tecla para que la ROM la
-/// registre de forma fiable.
+/// Frames a key has to be held down for the ROM to register it reliably.
 ///
-/// El bucle de espera de teclado de la ROM (`WAIT_4_KB`, $E243) duerme
-/// en `HLT` ($E2A8) entre interrupciones de temporizador; al detectar
-/// una tecla la convierte con `KEY_2_ASCII` ($E42C), la procesa, y no
-/// acepta otra hasta haber visto el teclado vacío durante un rato.
-/// Medido tecleando un texto de 23 caracteres distintos (y otro con
-/// teclas repetidas, `AABB1122`) con todas las combinaciones de 1 a 7
-/// frames de pulsación (`h`) y de suelta (`r`): funciona si y solo si
-/// `r >= 2` y `h + r >= 6` (con menos se pierden teclas, p. ej. `h=r=2`
-/// teclea solo una de cada dos). Mantener la tecla pulsada mucho más
-/// tiempo (probado hasta 80 frames) no produce autorrepetición para
-/// teclas de carácter. Los valores por defecto, 4 + 4 = 8 frames por
-/// tecla (~92 ms emulados), dejan 2 frames de margen sobre el mínimo
-/// en ambos lados; `tests/harness.rs` comprueba que el mínimo `3 + 3`
-/// sigue funcionando para detectar si algún cambio futuro lo empeora.
+/// The ROM's keyboard wait loop (`WAIT_4_KB`, $E243) sleeps in `HLT` ($E2A8) between timer
+/// interrupts; when it detects a key it converts it with `KEY_2_ASCII` ($E42C), processes it, and
+/// takes no other until it has seen the keyboard empty for a while. Measured typing a text of 23
+/// different characters (and another with repeated keys, `AABB1122`) with all the combinations of 1
+/// to 7 frames of press (`h`) and of release (`r`): it works if and only if `r >= 2` and
+/// `h + r >= 6` (with less, keys are lost, e.g. `h=r=2` types only one in two). Holding the key
+/// down much longer (tried up to 80 frames) gives no key repeat for character keys. The defaults, 4
+/// + 4 = 8 frames per key (~92 emulated ms), leave 2 frames of margin over the minimum on both
+/// sides; `tests/harness.rs` checks that the minimum `3 + 3` still works, to notice if a future
+/// change makes it worse.
 pub const KEY_HOLD_FRAMES: usize = 4;
 
-/// Frames que hay que dejar SIN ninguna tecla pulsada tras soltar una,
-/// antes de pulsar la siguiente: la ROM tiene que ver el teclado vacío
-/// para "rearmar" la detección (si no, la siguiente pulsación se toma
-/// como la misma tecla mantenida y se pierde). Ver [`KEY_HOLD_FRAMES`]
-/// para la medida.
+/// Frames to leave with NO key down after releasing one, before pressing the next: the ROM has to
+/// see the keyboard empty to "rearm" the detection (otherwise the next key press is taken as the
+/// same key held and is lost). See [`KEY_HOLD_FRAMES`] for the measurement.
 pub const KEY_RELEASE_FRAMES: usize = 4;
 
-/// Máximo de frames que [`Pc1500::boot`] espera a que la ROM llegue al
-/// bucle de espera de teclado. En la práctica el arranque en frío tarda
-/// 36 frames (~0.4 s emulados: test de memoria, borrado del LCD y
-/// mensaje `NEW0? :CHECK`) y [`Pc1500::boot`] completo, con el `CL`, 46
-/// (medido con la tabla virtual de `CLOAD`/`CSAVE` de $9800, cuyo vector
-/// de inicialización llama la ROM al arrancar: sin ella eran 35 y 45);
-/// el límite solo evita colgar un test si el emulador se rompe.
+/// Maximum of frames that [`Pc1500::boot`] waits for the ROM to reach the keyboard wait loop. In
+/// practice the cold start takes 36 frames (~0.4 emulated s: memory test, clearing the LCD and the
+/// `NEW0? :CHECK` message) and the whole [`Pc1500::boot`], with the `CL`, 46 (measured with the
+/// virtual table of `CLOAD`/`CSAVE` at $9800, whose initialization vector the ROM calls at boot:
+/// without it, they were 35 and 45); the limit only keeps a test from hanging if the emulator
+/// breaks.
 pub const BOOT_MAX_FRAMES: usize = 600;
 
-/// Máximo de frames que [`Pc1500::enter_line`] espera a que la ROM
-/// termine de procesar una línea y vuelva a estar lista para teclado
-/// (~34 s emulados). Meter una línea de programa o ejecutar un comando
-/// directo sencillo tarda de 2 a ~10 frames; el límite solo evita colgar
-/// un test si algo se rompe. Para comandos que tardan más (p. ej. `RUN`
-/// de un programa largo), usar [`Pc1500::type_text`] y
-/// [`Pc1500::run_until_ready`] con un límite propio.
+/// Maximum of frames that [`Pc1500::enter_line`] waits for the ROM to finish processing a line and
+/// be ready for the keyboard again (~34 emulated s). Entering a program line or running a simple
+/// direct command takes 2 to ~10 frames; the limit only keeps a test from hanging if something
+/// breaks. For commands that take longer (e.g. `RUN` of a long program), use [`Pc1500::type_text`]
+/// and [`Pc1500::run_until_ready`] with a limit of their own.
 pub const LINE_MAX_FRAMES: usize = 3000;
 
-/// `CURS_CTRL` ($7B0E), byte de control del cursor/teclado de la ROM.
-/// Ver [`Pc1500::is_ready_for_key`].
+/// `CURS_CTRL` ($7B0E), the ROM's cursor/keyboard control byte. See [`Pc1500::is_ready_for_key`].
 const CURS_CTRL: u32 = 0x7B0E;
 
-/// Bit 0 de `CURS_CTRL`: "hay una tecla que todavía no se ha visto
-/// soltar". Ver [`Pc1500::is_ready_for_key`].
+/// Bit 0 of `CURS_CTRL`: "there is a key not yet seen released". See [`Pc1500::is_ready_for_key`].
 const CURS_CTRL_KEY_DOWN: u8 = 0x01;
 
-/// Tabla de caracteres 5x7 de la ROM (`$FCA0`, "Character set table"):
-/// 96 glifos para los códigos $20-$7F, 5 bytes por glifo, un byte por
-/// columna con el bit 0 = fila superior y el bit 6 = fila inferior (la
-/// misma disposición que decodifica `display.rs`). La usa `CHAR_2_ADDR`
-/// ($EE48): dirección = $FC00 + 5 × código.
+/// The ROM's 5x7 character table (`$FCA0`, "Character set table"): 96 glyphs for the codes $20-$7F,
+/// 5 bytes per glyph, one byte per column with bit 0 = top row and bit 6 = bottom row (the same
+/// layout that `display.rs` decodes). `CHAR_2_ADDR` ($EE48) uses it: address = $FC00 + 5 × code.
 const FONT_TABLE: u32 = 0xFCA0;
 const FONT_FIRST_CHAR: u8 = 0x20;
 const FONT_CHARS: u8 = 96;
 
-// `KeyStroke`, `key_for_char` y `text_to_keystrokes` viven en
-// `keyboard.rs` (los usa también el alimentador de teclas de la GUI, ver
-// `key_feeder.rs`); se reexportan aquí para que la API del arnés no
-// cambie.
+// `KeyStroke`, `key_for_char` and `text_to_keystrokes` live in `keyboard.rs` (the GUI's key feeder
+// uses them too, see `key_feeder.rs`); they are re-exported here so that the harness's API does not
+// change.
 pub use crate::keyboard::{KeyStroke, key_for_char, text_to_keystrokes};
 
-/// Por qué falló [`Pc1500::enter_line`] / [`Pc1500::enter_lines`].
+/// Why [`Pc1500::enter_line`] / [`Pc1500::enter_lines`] failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnterLineError {
-    /// El texto contiene un carácter sin tecla (ver [`key_for_char`]).
-    /// No se ha pulsado nada.
+    /// The text has a character with no key (see [`key_for_char`]). Nothing has been pressed.
     Unmappable(char),
-    /// [`Pc1500::enter_line`] recibió más de una línea (un `\n` que no
-    /// es el final). Usar [`Pc1500::enter_lines`]. No se ha pulsado nada.
+    /// [`Pc1500::enter_line`] got more than one line (a `\n` that is not at the end). Use
+    /// [`Pc1500::enter_lines`]. Nothing has been pressed.
     MultipleLines,
-    /// La ROM no quedó lista para la siguiente tecla en
-    /// [`LINE_MAX_FRAMES`] frames (un programa que no termina, un
-    /// `INPUT` que no llega a pedir teclado, un emulador roto...). Puede
-    /// haberse tecleado parte del texto.
+    /// The ROM was not ready for the next key within [`LINE_MAX_FRAMES`] frames (a program that
+    /// does not end, an `INPUT` that never asks for the keyboard, a broken emulator...). Part of
+    /// the text may have been typed.
     NotReady,
 }
 
 impl fmt::Display for EnterLineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unmappable(c) => write!(f, "el car\u{e1}cter '{c}' no tiene tecla en la PC-1500"),
-            Self::MultipleLines => f.write_str("enter_line recibe una sola l\u{ed}nea"),
+            Self::Unmappable(c) => write!(f, "the character '{c}' has no key on the PC-1500"),
+            Self::MultipleLines => f.write_str("enter_line takes a single line"),
             Self::NotReady => write!(
                 f,
-                "la ROM no volvi\u{f3} a estar lista para teclado en {LINE_MAX_FRAMES} frames"
+                "the ROM was not ready for the keyboard again in {LINE_MAX_FRAMES} frames"
             ),
         }
     }
@@ -173,12 +143,10 @@ impl fmt::Display for EnterLineError {
 impl Error for EnterLineError {}
 
 impl Pc1500 {
-    /// Como [`Pc1500::new`], pero con el reloj `µPD1990AC` en
-    /// [`RtcTimeBase::Emulated`], empezando en [`HARNESS_RTC_START`]: una hora fija
-    /// que avanza con los ciclos emulados, sin mirar el reloj del host.
-    /// Así todo lo que haga la máquina (incluidos `TIME` y `RANDOM`)
-    /// depende solo de lo que se le teclee. Es la forma de crear la
-    /// máquina en los tests.
+    /// As [`Pc1500::new`], but with the `µPD1990AC` clock in [`RtcTimeBase::Emulated`], starting at
+    /// [`HARNESS_RTC_START`]: a fixed time that moves on with the emulated cycles, without looking
+    /// at the host's clock. So everything the machine does (`TIME` and `RANDOM` included) depends
+    /// only on what is typed into it. It is the way to create the machine in the tests.
     #[must_use]
     pub fn new_deterministic() -> Self {
         let mut pc = Self::new();
@@ -193,23 +161,21 @@ impl Pc1500 {
         }
     }
 
-    /// `true` si la ROM está ociosa esperando una tecla: la CPU está
-    /// detenida en el `HLT` del bucle `WAIT_4_KB` ($E243-$E33E), que es
-    /// donde pasa casi todo el tiempo cuando muestra el prompt (o cuando
-    /// un `INPUT` espera datos). Solo es fiable mirado entre frames: el
-    /// bucle se despierta en cada interrupción de temporizador para
-    /// parpadear el cursor y vuelve a dormirse enseguida.
+    /// `true` if the ROM is idle waiting for a key: the CPU is halted in the `HLT` of the
+    /// `WAIT_4_KB` loop ($E243-$E33E), which is where it spends almost all its time when it shows
+    /// the prompt (or when an `INPUT` waits for data). It is only reliable looked at between
+    /// frames: the loop wakes up at each timer interrupt to blink the cursor and goes back to sleep
+    /// at once.
     #[must_use]
     ///
-    /// Con la máquina apagada (ver [`Pc1500::is_powered_on`]) es siempre
-    /// `false`: no llamar a [`Pc1500::run_until_idle`] en ese estado.
+    /// With the machine off (see [`Pc1500::is_powered_on`]) it is always `false`: do not call
+    /// [`Pc1500::run_until_idle`] in that state.
     pub fn is_waiting_for_key(&self) -> bool {
         self.lh5801.bf() && self.lh5801.is_halted() && self.cpu_in_wait_4_kb()
     }
 
-    /// Ejecuta frames hasta que `done(self)` sea cierto, comprobándolo
-    /// después de cada frame, con un máximo de `max_frames`. Devuelve el
-    /// número de frames ejecutados, o `None` si se agotó el límite.
+    /// Runs frames until `done(self)` is true, checking it after each frame, up to `max_frames`. It
+    /// returns the number of frames run, or `None` if the limit ran out.
     pub fn run_until<F: FnMut(&Self) -> bool>(
         &mut self,
         max_frames: usize,
@@ -224,11 +190,10 @@ impl Pc1500 {
         None
     }
 
-    /// Ejecuta frames hasta que la ROM vuelva a esperar teclado (ver
-    /// [`Pc1500::is_waiting_for_key`]) durante 2 frames seguidos — uno
-    /// solo podría ser un `HLT` momentáneo a mitad de un comando que
-    /// todavía no ha terminado de pintar el resultado. Devuelve los
-    /// frames ejecutados o `None` si no ocurre en `max_frames`.
+    /// Runs frames until the ROM waits for the keyboard again (see [`Pc1500::is_waiting_for_key`])
+    /// for 2 frames in a row — a single one could be a momentary `HLT` in the middle of a command
+    /// that has not finished painting its result yet. It returns the frames run or `None` if it
+    /// does not happen within `max_frames`.
     pub fn run_until_idle(&mut self, max_frames: usize) -> Option<usize> {
         let mut streak = 0;
         self.run_until(max_frames, |pc| {
@@ -237,55 +202,42 @@ impl Pc1500 {
         })
     }
 
-    /// `true` si la ROM no solo está ociosa en `WAIT_4_KB` (ver
-    /// [`Pc1500::is_waiting_for_key`]) sino que además aceptará la
-    /// PRÓXIMA tecla que se pulse como una pulsación nueva.
+    /// `true` if the ROM is not only idle in `WAIT_4_KB` (see [`Pc1500::is_waiting_for_key`]) but
+    /// will also take the NEXT key pressed as a new key press.
     ///
-    /// # Por qué no basta con `is_waiting_for_key`
-    /// `WAIT_4_KB` ($E243) no detecta "flancos" de tecla: en cada
-    /// despertar del temporizador mira si hay ALGUNA tecla pulsada, y el
-    /// bit 0 de `CURS_CTRL` ($7B0E) recuerda si en el despertar anterior
-    /// ya la había:
+    /// # Why `is_waiting_for_key` is not enough
+    /// `WAIT_4_KB` ($E243) does not detect key "edges": at each wake-up of the timer it looks
+    /// whether ANY key is down, and bit 0 of `CURS_CTRL` ($7B0E) remembers whether there already
+    /// was one at the previous wake-up:
     ///
-    /// - Tecla pulsada con el bit 0 a 0 (`WAIT_4_KB_7`, $E2AC): tecla
-    ///   nueva. La ROM pone el bit 0 a 1, guarda el código en `KEY_LAST`
-    ///   ($7B0F) y sale de `WAIT_4_KB` devolviéndola.
-    /// - Tecla pulsada con el bit 0 a 1: se considera la MISMA tecla
-    ///   mantenida. Sin autorrepetición activa (bit 6 a 0, lo normal
-    ///   salvo con las flechas) se ignora (`WAIT_4_KB_16`, $E2FF) y
-    ///   además se reinicia el contador de suelta (`UH = $F8`) — da igual
-    ///   que sea otra tecla distinta.
-    /// - Ninguna tecla con el bit 0 a 1 (`WAIT_4_KB_10`, $E2C4): se
-    ///   incrementa `UH`, y solo cuando llega a 0 (8 despertares
-    ///   seguidos sin tecla) se borra el bit 0 ($E2D4).
+    /// - Key down with bit 0 at 0 (`WAIT_4_KB_7`, $E2AC): a new key. The ROM sets bit 0, keeps the
+    ///   code in `KEY_LAST` ($7B0F) and leaves `WAIT_4_KB` returning it.
+    /// - Key down with bit 0 at 1: taken as the SAME key held. Without key repeat on (bit 6 at 0,
+    ///   the usual except with the arrows) it is ignored (`WAIT_4_KB_16`, $E2FF), and besides the
+    ///   release counter is restarted (`UH = $F8`) — whether or not it is a different key.
+    /// - No key with bit 0 at 1 (`WAIT_4_KB_10`, $E2C4): `UH` is incremented, and only when it
+    ///   reaches 0 (8 wake-ups in a row with no key) is bit 0 cleared ($E2D4).
     ///
-    /// Ese bit 0 SOLO se borra dentro de `WAIT_4_KB`: la entrada a la
-    /// rutina ($E24A) borra el bit 1 pero no el 0. Así que si la ROM
-    /// tarda en procesar una tecla más que lo que dura su pulsación (lo
-    /// típico con ENTER en una línea larga: tokenizar, insertarla en el
-    /// programa y volver a pintarla), cuando vuelve a `WAIT_4_KB` y se
-    /// duerme en `HLT` el bit 0 sigue a 1 aunque ya no haya ninguna
-    /// tecla pulsada, y la ROM necesita todavía esos 8 despertares
-    /// (~1-2 frames) sin teclas antes de aceptar otra. Una tecla pulsada
-    /// en ese hueco se pierde ENTERA: medido tecleando `jackpot` línea a
-    /// línea, tras `170 SI=112:DO=105:RE=93:MI=82:SO=68:TP=80` (41
-    /// caracteres) `run_until_idle` volvía con `CURS_CTRL = $01` y la
-    /// línea siguiente `200 REM ...` llegaba como `00 REM ...` (ERROR
-    /// 1). Es el comportamiento de la ROM auténtica, no un fallo del
-    /// emulador: en la máquina real pasaría lo mismo tecleando así de
-    /// rápido. Esta es la condición exacta que faltaba (antes se tapaba
-    /// con ~30 frames fijos de espera "por si acaso").
+    /// That bit 0 is ONLY cleared inside `WAIT_4_KB`: the entry to the routine ($E24A) clears bit 1
+    /// but not 0. So if the ROM takes longer to process a key than its press lasts (the usual thing
+    /// with ENTER on a long line: tokenizing it, inserting it in the program and painting it
+    /// again), when it goes back to `WAIT_4_KB` and sleeps in `HLT` bit 0 is still at 1 although no
+    /// key is down any more, and the ROM still needs those 8 wake-ups (~1-2 frames) with no keys
+    /// before it takes another. A key pressed in that gap is lost ENTIRELY: measured typing
+    /// `jackpot` line by line, after `170 SI=112:DO=105:RE=93:MI=82:SO=68:TP=80` (41 characters)
+    /// `run_until_idle` came back with `CURS_CTRL = $01` and the next line `200 REM ...` arrived as
+    /// `00 REM ...` (ERROR 1). It is the authentic ROM's behaviour, not a fault of the emulator: on
+    /// the real machine the same would happen typing that fast. This is the exact condition that
+    /// was missing (it used to be covered up with ~30 fixed frames of waiting "just in case").
     #[must_use]
     pub fn is_ready_for_key(&self) -> bool {
         self.is_waiting_for_key() && self.read_byte(CURS_CTRL) & CURS_CTRL_KEY_DOWN == 0
     }
 
-    /// Como [`Pc1500::run_until_idle`], pero esperando a
-    /// [`Pc1500::is_ready_for_key`] (también 2 frames seguidos): tras
-    /// esto la siguiente tecla que se pulse no se pierde. Devuelve los
-    /// frames ejecutados o `None` si no ocurre en `max_frames` — p. ej.
-    /// si hay una tecla mantenida pulsada, porque entonces el bit 0 de
-    /// `CURS_CTRL` nunca se borra.
+    /// As [`Pc1500::run_until_idle`], but waiting for [`Pc1500::is_ready_for_key`] (also 2 frames
+    /// in a row): after this, the next key pressed is not lost. It returns the frames run or `None`
+    /// if it does not happen within `max_frames` — e.g. if a key is held down, because then bit 0
+    /// of `CURS_CTRL` is never cleared.
     pub fn run_until_ready(&mut self, max_frames: usize) -> Option<usize> {
         let mut streak = 0;
         self.run_until(max_frames, |pc| {
@@ -294,55 +246,47 @@ impl Pc1500 {
         })
     }
 
-    /// Arranca la ROM real desde un `Pc1500` recién creado hasta que
-    /// queda esperando teclado. Tras un arranque en frío el LCD muestra
-    /// `NEW0? :CHECK` (la ROM no reconoce la RAM como inicializada); la
-    /// primera tecla que se pulse solo borra ese mensaje, por eso este
-    /// método pulsa además `CL`, dejando el LCD con el prompt `>`.
+    /// Boots the real ROM from a new `Pc1500` until it waits for the keyboard. After a cold start
+    /// the LCD shows `NEW0? :CHECK` (the ROM does not recognize the RAM as initialized); the first
+    /// key pressed only clears that message, which is why this method also presses `CL`, leaving
+    /// the LCD with the `>` prompt.
     ///
-    /// El programa BASIC tokenizado que `MemoryBus::new()` inyecta como
-    /// fixture en $0100 sigue en memoria después de esto (no se hace
-    /// `NEW`): el test que no lo quiera puede teclear `NEW\n`.
+    /// The tokenized BASIC program that `MemoryBus::new()` puts in RAM at power-on (bathyscaph, at
+    /// $00C5) is still in memory after this (no `NEW` is done): a test that does not want it can
+    /// type `NEW\n`.
     ///
-    /// Devuelve los frames que tardó, o `None` si la ROM no llegó al
-    /// prompt en [`BOOT_MAX_FRAMES`].
+    /// It returns the frames it took, or `None` if the ROM did not reach the prompt within
+    /// [`BOOT_MAX_FRAMES`].
     pub fn boot(&mut self) -> Option<usize> {
         let boot_frames = self.run_until_idle(BOOT_MAX_FRAMES)?;
         self.tap(KeyStroke::plain(Key::Cl));
-        // `run_until_ready` y no `run_until_idle`: así la primera tecla
-        // que pulse el test tras `boot()` nunca cae en el antirrebote de
-        // suelta del `CL` (ver `is_ready_for_key`).
+        // `run_until_ready` and not `run_until_idle`: so the first key the test presses after
+        // `boot()` never falls in the release debounce of the `CL` (see `is_ready_for_key`).
         let after_cl = self.run_until_ready(BOOT_MAX_FRAMES)?;
         Some(boot_frames + KEY_HOLD_FRAMES + KEY_RELEASE_FRAMES + after_cl)
     }
 
-    /// Enciende una máquina apagada (ver [`Pc1500::is_powered_on`]) como
-    /// lo haría una persona: pulsa `ON` con los tiempos por defecto y
-    /// espera a que la ROM termine su rutina `RESET` y quede lista para
-    /// la siguiente tecla (ver [`Pc1500::is_ready_for_key`]). Lo que
-    /// muestra luego el LCD depende de cómo se apagó: tras la tecla `OFF`
-    /// el prompt `>` (`COLD_START`, con el programa conservado); tras el
-    /// auto-apagado, la línea que se estaba editando, tal cual.
+    /// Switches on a machine that is off (see [`Pc1500::is_powered_on`]) as a person would: presses
+    /// `ON` with the default timing and waits for the ROM to finish its `RESET` routine and be
+    /// ready for the next key (see [`Pc1500::is_ready_for_key`]). What the LCD then shows depends
+    /// on how it was switched off: after the `OFF` key, the `>` prompt (`COLD_START`, with the
+    /// program kept); after the automatic power-off, the line being edited, as it was.
     ///
-    /// Esperar a [`Pc1500::is_ready_for_key`] (y no solo a
-    /// [`Pc1500::is_waiting_for_key`]) es lo que hace falta aquí: al
-    /// apagarse con la tecla `OFF` la ROM corta la alimentación con esa
-    /// tecla todavía pulsada, así que el bit 0 de `CURS_CTRL` ("tecla
-    /// sin soltar") sigue a 1 al encender, y la primera tecla pulsada
-    /// antes de que `WAIT_4_KB` vea el teclado vacío durante 8
-    /// despertares se pierde entera. No hace falta pulsar `CL` después.
+    /// Waiting for [`Pc1500::is_ready_for_key`] (and not only for [`Pc1500::is_waiting_for_key`])
+    /// is what is needed here: when switched off with the `OFF` key, the ROM cuts the power with
+    /// that key still down, so bit 0 of `CURS_CTRL` ("key not released") is still at 1 on switching
+    /// on, and the first key pressed before `WAIT_4_KB` sees the keyboard empty for 8 wake-ups is
+    /// lost entirely. There is no need to press `CL` afterwards.
     ///
-    /// Devuelve los frames que tardó la ROM tras soltar `ON`, o `None` si
-    /// no quedó lista en [`BOOT_MAX_FRAMES`] (p. ej. si la máquina ya
-    /// estaba encendida y un programa en marcha ignora el BREAK). Con la
-    /// máquina encendida, pulsar `ON` es un BREAK.
+    /// It returns the frames the ROM took after `ON` was released, or `None` if it was not ready
+    /// within [`BOOT_MAX_FRAMES`] (e.g. if the machine was already on and a running program ignores
+    /// the BREAK). With the machine on, pressing `ON` is a BREAK.
     pub fn power_on(&mut self) -> Option<usize> {
         self.tap_key_for(Key::On, KEY_HOLD_FRAMES, KEY_RELEASE_FRAMES);
         self.run_until_ready(BOOT_MAX_FRAMES)
     }
 
-    /// Pulsa `key` durante `hold` frames y la suelta durante `release`
-    /// frames.
+    /// Presses `key` for `hold` frames and releases it for `release` frames.
     pub fn tap_key_for(&mut self, key: Key, hold: usize, release: usize) {
         self.press(key);
         self.run_frames(hold);
@@ -350,15 +294,14 @@ impl Pc1500 {
         self.run_frames(release);
     }
 
-    /// Teclea una [`KeyStroke`] con los tiempos por defecto
-    /// ([`KEY_HOLD_FRAMES`] / [`KEY_RELEASE_FRAMES`]), pulsando y
-    /// soltando antes `SHIFT` si hace falta.
+    /// Types a [`KeyStroke`] with the default timing ([`KEY_HOLD_FRAMES`] /
+    /// [`KEY_RELEASE_FRAMES`]), pressing and releasing `SHIFT` first if needed.
     pub fn tap(&mut self, stroke: KeyStroke) {
         self.tap_with_timing(stroke, KEY_HOLD_FRAMES, KEY_RELEASE_FRAMES);
     }
 
-    /// Igual que [`Pc1500::tap`] pero con tiempos explícitos (para
-    /// medirlos o para programas que leen el teclado más despacio).
+    /// The same as [`Pc1500::tap`] but with explicit timing (to measure it, or for programs that
+    /// read the keyboard more slowly).
     pub fn tap_with_timing(&mut self, stroke: KeyStroke, hold: usize, release: usize) {
         if stroke.shift {
             self.tap_key_for(Key::Shift, hold, release);
@@ -366,23 +309,20 @@ impl Pc1500 {
         self.tap_key_for(stroke.key, hold, release);
     }
 
-    /// Teclea `text` (ver [`text_to_keystrokes`]) con los tiempos por
-    /// defecto. Si contiene algún carácter sin tecla devuelve `Err(c)`
-    /// sin haber pulsado nada.
+    /// Types `text` (see [`text_to_keystrokes`]) with the default timing. If it has a character
+    /// with no key, it returns `Err(c)` without having pressed anything.
     ///
-    /// No espera a que la ROM termine de procesar un ENTER, así que con
-    /// varias líneas seguidas en el mismo texto la primera tecla de una
-    /// línea se puede perder si la anterior tarda en procesarse (ver
-    /// [`Pc1500::is_ready_for_key`]). Para teclear líneas completas usar
-    /// [`Pc1500::enter_line`] / [`Pc1500::enter_lines`]; `type_text` es
-    /// para lo demás (eco de caracteres sueltos, responder a un `INPUT`
-    /// o a un `PRINT` que espera ENTER dentro de un programa que luego
-    /// sigue ejecutándose...), seguido de [`Pc1500::run_until_ready`].
+    /// It does not wait for the ROM to finish processing an ENTER, so with several lines in a row
+    /// in the same text the first key of a line can be lost if the previous one takes long to
+    /// process (see [`Pc1500::is_ready_for_key`]). To type whole lines use [`Pc1500::enter_line`] /
+    /// [`Pc1500::enter_lines`]; `type_text` is for the rest (echo of single characters, answering
+    /// an `INPUT` or a `PRINT` that waits for ENTER inside a program that then goes on running...),
+    /// followed by [`Pc1500::run_until_ready`].
     pub fn type_text(&mut self, text: &str) -> Result<(), char> {
         self.type_text_with_timing(text, KEY_HOLD_FRAMES, KEY_RELEASE_FRAMES)
     }
 
-    /// Igual que [`Pc1500::type_text`] pero con tiempos explícitos.
+    /// The same as [`Pc1500::type_text`] but with explicit timing.
     pub fn type_text_with_timing(
         &mut self,
         text: &str,
@@ -395,23 +335,19 @@ impl Pc1500 {
         Ok(())
     }
 
-    /// Teclea UNA línea seguida de ENTER y espera a que la ROM la haya
-    /// procesado y vuelva a estar lista para la siguiente tecla (ver
-    /// [`Pc1500::is_ready_for_key`]), así que se puede llamar una vez
-    /// tras otra sin perder teclas. Sirve para líneas de programa
-    /// (`"10 PRINT 5"`) y para comandos directos que vuelven al prompt o
-    /// esperan teclado (`"LIST"`, `"PRINT 1+2"`, `"RUN"` de un programa
-    /// que hace `PRINT`...). `""` pulsa solo ENTER.
+    /// Types ONE line followed by ENTER and waits for the ROM to have processed it and be ready for
+    /// the next key again (see [`Pc1500::is_ready_for_key`]), so it can be called once after
+    /// another without losing keys. It is for program lines (`"10 PRINT 5"`) and for direct
+    /// commands that go back to the prompt or wait for the keyboard (`"LIST"`, `"PRINT 1+2"`,
+    /// `"RUN"` of a program that does `PRINT`...). `""` presses only ENTER.
     ///
-    /// El `\n` final es opcional (`"10 A=1"` y `"10 A=1\n"` son lo
-    /// mismo, y se acepta también `\r\n`); cualquier otro `\n` es un
-    /// error ([`EnterLineError::MultipleLines`]): para varias líneas,
-    /// [`Pc1500::enter_lines`]. Si la ROM no estaba lista al empezar
-    /// (p. ej. justo después de un `type_text`), primero espera a que lo
-    /// esté.
+    /// The final `\n` is optional (`"10 A=1"` and `"10 A=1\n"` are the same, and `\r\n` is accepted
+    /// too); any other `\n` is an error ([`EnterLineError::MultipleLines`]): for several lines,
+    /// [`Pc1500::enter_lines`]. If the ROM was not ready at the start (e.g. right after a
+    /// `type_text`), it first waits until it is.
     ///
-    /// Devuelve los frames que tardó la ROM en quedar lista tras el
-    /// ENTER (sin contar los del propio tecleo).
+    /// It returns the frames the ROM took to be ready after the ENTER (not counting those of the
+    /// typing itself).
     pub fn enter_line(&mut self, line: &str) -> Result<usize, EnterLineError> {
         let body = line.strip_suffix('\n').unwrap_or(line);
         let body = body.strip_suffix('\r').unwrap_or(body);
@@ -423,12 +359,10 @@ impl Pc1500 {
         self.type_strokes_when_ready(&strokes)
     }
 
-    /// Teclea varias líneas con [`Pc1500::enter_line`], una detrás de
-    /// otra (separadas por `\n` o `\r\n`; el salto de línea final es
-    /// opcional y las líneas vacías intermedias son un ENTER sin más).
-    /// Comprueba TODO el texto antes de pulsar nada, así que un
-    /// [`EnterLineError::Unmappable`] no deja líneas a medias. Devuelve
-    /// la suma de los frames de espera de cada línea.
+    /// Types several lines with [`Pc1500::enter_line`], one after another (separated by `\n` or
+    /// `\r\n`; the final line break is optional and empty lines in between are just an ENTER). It
+    /// checks ALL the text before pressing anything, so an [`EnterLineError::Unmappable`] leaves no
+    /// lines half done. It returns the sum of the waiting frames of each line.
     pub fn enter_lines(&mut self, text: &str) -> Result<usize, EnterLineError> {
         let lines: Vec<Vec<KeyStroke>> = text
             .lines()
@@ -446,10 +380,9 @@ impl Pc1500 {
         Ok(total)
     }
 
-    /// Núcleo de [`Pc1500::enter_line`]: espera (si hace falta) a que la
-    /// ROM esté lista, teclea `strokes` con los tiempos por defecto y
-    /// vuelve a esperar a que esté lista, devolviendo los frames de esa
-    /// última espera.
+    /// Core of [`Pc1500::enter_line`]: waits (if needed) for the ROM to be ready, types `strokes`
+    /// with the default timing and waits again for it to be ready, returning the frames of that
+    /// last wait.
     fn type_strokes_when_ready(&mut self, strokes: &[KeyStroke]) -> Result<usize, EnterLineError> {
         if !self.is_ready_for_key() {
             self.run_until_ready(LINE_MAX_FRAMES)
@@ -462,15 +395,14 @@ impl Pc1500 {
             .ok_or(EnterLineError::NotReady)
     }
 
-    /// Las 156 columnas de píxeles del LCD, leídas directamente de la RAM
-    /// de pantalla con la misma correspondencia que `display.rs`: cada
-    /// columna es un byte con el bit 0 = fila superior. Columnas 0-38 =
-    /// nibbles bajos de $7600-$764D, 39-77 = bajos de $7700-$774D, 78-116
-    /// = altos de $7600.., 117-155 = altos de $7700... (el nibble de la
-    /// dirección par da las filas 0-3 y el de la impar las 4-6).
+    /// The 156 columns of pixels of the LCD, read straight from the display RAM with the same
+    /// mapping as `display.rs`: each column is a byte with bit 0 = top row. Columns 0-38 = low
+    /// nibbles of $7600-$764D, 39-77 = low ones of $7700-$774D, 78-116 = high ones of $7600..,
+    /// 117-155 = high ones of $7700... (the nibble of the even address gives rows 0-3 and that of
+    /// the odd one rows 4-6).
     ///
-    /// No mira si el LCD está encendido (flag `DISP` de la CPU): devuelve
-    /// lo que hay en la RAM de pantalla.
+    /// It does not look at whether the LCD is on (the CPU's `DISP` flag): it returns what is in the
+    /// display RAM.
     #[must_use]
     pub fn lcd_columns(&self) -> [u8; DISPLAY_WIDTH] {
         let mut columns = [0; DISPLAY_WIDTH];
@@ -486,7 +418,7 @@ impl Pc1500 {
         columns
     }
 
-    /// Glifo 5x7 de la ROM para el código `code` ($20-$7F).
+    /// The ROM's 5x7 glyph for the code `code` ($20-$7F).
     fn font_glyph(&self, code: u8) -> [u8; 5] {
         let base = FONT_TABLE + 5 * u32::from(code - FONT_FIRST_CHAR);
         let mut glyph = [0; 5];
@@ -496,20 +428,18 @@ impl Pc1500 {
         glyph
     }
 
-    /// Las 26 celdas de carácter del LCD, cada una reconocida comparando
-    /// sus 5 columnas de glifo con la tabla de caracteres de la ROM
-    /// ($FCA0). `None` si la celda no coincide con ningún glifo (gráficos
-    /// de `GPRINT`, katakana, el bloque del cursor de inserción...) o si
-    /// su columna de separación no está vacía.
+    /// The 26 character cells of the LCD, each one recognized by comparing its 5 glyph columns with
+    /// the ROM's character table ($FCA0). `None` if the cell matches no glyph (graphics of
+    /// `GPRINT`, katakana, the block of the insert cursor...) or if its spacing column is not
+    /// empty.
     ///
-    /// El cursor normal es el glifo de `_`, así que una celda con el
-    /// cursor visible se lee como `'_'` (y como `' '` en la fase apagada
-    /// del parpadeo).
+    /// The normal cursor is the glyph of `_`, so a cell with the cursor visible reads as `'_'` (and
+    /// as `' '` in the off phase of the blink).
     #[must_use]
     pub fn lcd_cells(&self) -> [Option<char>; LCD_CHARS] {
         let columns = self.lcd_columns();
-        // El código $7F es el bloque del cursor de inserción, no un
-        // carácter imprimible: se excluye de la búsqueda.
+        // Code $7F is the block of the insert cursor, not a printable character: it is left out of
+        // the search.
         let glyphs: Vec<(u8, [u8; 5])> = (FONT_FIRST_CHAR..FONT_FIRST_CHAR + FONT_CHARS - 1)
             .map(|code| (code, self.font_glyph(code)))
             .collect();
@@ -526,37 +456,34 @@ impl Pc1500 {
         })
     }
 
-    /// El LCD como texto de exactamente 26 caracteres (ver
-    /// [`Pc1500::lcd_cells`]), con `'?'` en las celdas no reconocidas.
-    /// Ojo: un `?` auténtico también se lee como `'?'`; usar
-    /// [`Pc1500::lcd_cells`] si hay que distinguirlos.
+    /// The LCD as a text of exactly 26 characters (see [`Pc1500::lcd_cells`]), with `'?'` in the
+    /// cells not recognized. Note: a real `?` also reads as `'?'`; use [`Pc1500::lcd_cells`] if
+    /// they have to be told apart.
     #[must_use]
     pub fn lcd_text(&self) -> String {
         self.lcd_cells().iter().map(|c| c.unwrap_or('?')).collect()
     }
 
-    /// Bytes crudos de los indicadores del LCD: `[$764E, $764F]`.
+    /// Raw bytes of the LCD's indicators: `[$764E, $764F]`.
     ///
-    /// Observado en el arranque (modo PRO, DEG): `[$40, $23]`. Con la
-    /// asignación de bits de PockEmul ($764E: BUSY $01, SHIFT $02, KANA
-    /// $04, SML $08, III $10, II $20, I $40, DEF $80; $764F: DE $01, G
-    /// $02, RAD $04, RESERVE $10, PRO $20, RUN $40) eso es "I", "DEG" y
-    /// "PRO": un bit a 1 = indicador encendido.
+    /// Seen at boot (PRO mode, DEG): `[$40, $23]`. With PockEmul's assignment of bits ($764E: BUSY
+    /// $01, SHIFT $02, KANA $04, SML $08, III $10, II $20, I $40, DEF $80; $764F: DE $01, G $02,
+    /// RAD $04, RESERVE $10, PRO $20, RUN $40) that is "I", "DEG" and "PRO": a bit at 1 = indicator
+    /// on.
     #[must_use]
     pub fn lcd_symbol_bytes(&self) -> [u8; 2] {
         [self.read_byte(0x764E), self.read_byte(0x764F)]
     }
 
-    /// Lee `len` bytes consecutivos desde `addr` (espacio ME0 si
-    /// `addr < 0x10000`, ME1 si se suma `0x10000`).
+    /// Reads `len` bytes in a row from `addr` (ME0 space if `addr < 0x10000`, ME1 if `0x10000` is
+    /// added).
     #[must_use]
     pub fn read_bytes(&self, addr: u32, len: usize) -> Vec<u8> {
         (addr..).take(len).map(|a| self.read_byte(a)).collect()
     }
 
-    /// Lee una palabra de 16 bits big-endian (el orden que usa la ROM
-    /// para sus punteros de RAM del sistema, p. ej. `BASPRG_ST_H` $7865 /
-    /// `BASPRG_ST_L` $7866).
+    /// Reads a 16-bit big-endian word (the order the ROM uses for its pointers in system RAM, e.g.
+    /// `BASPRG_ST_H` $7865 / `BASPRG_ST_L` $7866).
     #[must_use]
     pub fn read_word_be(&self, addr: u32) -> u16 {
         u16::from_be_bytes([self.read_byte(addr), self.read_byte(addr + 1)])

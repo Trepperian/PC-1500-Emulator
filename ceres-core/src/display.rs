@@ -1,11 +1,9 @@
-//! LCD de la PC-1500: la matriz de 156x7 puntos y los 15 indicadores
-//! ("annunciators") impresos encima, tal como los vería alguien mirando
-//! la máquina real.
+//! The PC-1500's LCD: the 156x7 dot matrix and the 15 indicators ("annunciators") printed above it,
+//! as someone looking at the real machine would see them.
 //!
-//! Todo sale de la RAM de pantalla ($7600-$764F y $7700-$774D) más dos
-//! señales de la CPU: `BF` (máquina encendida) y `DISP` (LCD activado,
-//! instrucciones `SDP`/`RDP`). Ver [`Pc1500::update_display_buffer`] y
-//! [`Pc1500::display`] para cómo se combinan.
+//! Everything comes from the display RAM ($7600-$764F and $7700-$774D) plus two CPU signals: `BF`
+//! (machine on) and `DISP` (LCD enabled, instructions `SDP`/`RDP`). See
+//! [`Pc1500::update_display_buffer`] and [`Pc1500::display`] for how they combine.
 
 use crate::Pc1500;
 
@@ -13,30 +11,28 @@ pub const DISPLAY_WIDTH: usize = 156;
 pub const DISPLAY_HEIGHT: usize = 7;
 pub const RGBA_SIZE: usize = DISPLAY_WIDTH * DISPLAY_HEIGHT * 4; // RGBA format
 
-/// Color RGBA de un punto encendido en [`DisplayController::rgba_buffer`]:
-/// el gris casi negro de un LCD STN real, no negro puro.
+/// RGBA color of a lit dot in [`DisplayController::rgba_buffer`]: the almost black grey of a real
+/// STN LCD, not pure black.
 pub const LCD_RGBA_ON: [u8; 4] = [0x1F, 0x26, 0x28, 0xFF];
 
-/// Color RGBA de un punto apagado (el fondo gris verdoso del cristal) en
-/// [`DisplayController::rgba_buffer`]. Antes era blanco puro.
+/// RGBA color of an unlit dot (the glass's greenish grey background) in
+/// [`DisplayController::rgba_buffer`]. It used to be pure white.
 pub const LCD_RGBA_OFF: [u8; 4] = [0xA9, 0xB3, 0xA0, 0xFF];
 
-/// Número de indicadores del LCD, incluido `Battery` (ver [`Symbol`]).
+/// Number of LCD indicators, `Battery` included (see [`Symbol`]).
 pub const SYMBOL_COUNT: usize = 15;
 
-/// Los indicadores impresos en el cristal del LCD, encima de la matriz de
-/// puntos, en el orden en que aparecen de izquierda a derecha.
+/// The indicators printed on the LCD's glass, above the dot matrix, in the order they appear from
+/// left to right.
 ///
-/// `De`, `G` y `Rad` son TRES segmentos distintos, no dos: en la máquina
-/// real están pegados uno a continuación del otro y se leen como "DEG"
-/// (`De` + `G`), "RAD" (`Rad` solo) o "GRAD" (`G` + `Rad`). Antes el enum
-/// solo tenía `Deg`/`Rad` y el bit de `G` acababa sobrescrito por el de
-/// `RAD`, así que `GRAD` y `DEG` eran indistinguibles.
+/// `De`, `G` and `Rad` are THREE different segments, not two: on the real machine they sit one
+/// after the other and read "DEG" (`De` + `G`), "RAD" (`Rad` alone) or "GRAD" (`G` + `Rad`). The
+/// enum used to have only `Deg`/`Rad`, and the bit of `G` ended up overwritten by `RAD`'s, so
+/// `GRAD` and `DEG` could not be told apart.
 ///
-/// `Battery` (pila baja) no lo controla ningún bit de la RAM de pantalla
-/// ni ninguna otra señal que emulemos: siempre está apagado. Se mantiene
-/// la variante para que la GUI pueda dibujar su segmento (o soportarlo en
-/// el futuro). Antes se forzaba siempre a encendido.
+/// `Battery` (low battery) is not driven by any bit of the display RAM or any other signal we
+/// emulate: it is always off. The variant is kept so that the GUI can draw its segment (or support
+/// it in the future). It used to be forced on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Symbol {
     Busy,
@@ -57,8 +53,7 @@ pub enum Symbol {
 }
 
 impl Symbol {
-    /// Todos los indicadores, en el mismo orden que el enum (`ALL[i] as
-    /// usize == i`).
+    /// All the indicators, in the same order as the enum (`ALL[i] as usize == i`).
     pub const ALL: [Self; SYMBOL_COUNT] = [
         Self::Busy,
         Self::Shift,
@@ -78,37 +73,31 @@ impl Symbol {
     ];
 }
 
-/// Qué bit de qué byte de la RAM de pantalla enciende cada indicador:
-/// `(indicador, dirección, máscara)`. Un bit a 1 = indicador ENCENDIDO.
+/// Which bit of which byte of the display RAM lights each indicator: `(indicator, address, mask)`.
+/// A bit at 1 = indicator ON.
 ///
-/// Antes `display.rs` lo interpretaba al revés (encendido con el bit a
-/// 0), y al arrancar mostraba BUSY, SHIFT, KANA, SML, II, III, DEF, RAD,
-/// RESERVE... justo lo contrario de la máquina real. Cada bit está
-/// confirmado en la propia ROM A04:
+/// `display.rs` used to read it the other way round (on with the bit at 0), and at boot showed
+/// BUSY, SHIFT, KANA, SML, II, III, DEF, RAD, RESERVE... just the opposite of the real machine.
+/// Every bit is confirmed in the A04 ROM itself:
 ///
-/// - `RESET_5` ($E04D-$E054) escribe $41 en $764E (BUSY + I) y $43 en
-///   $764F (RUN + DE + G); `COLD_START_2` ($CA24) escribe $23 en $764F
-///   (PRO + DE + G). El prompt de arranque es, pues, `[$40, $23]`: "I",
-///   "DEG" y "PRO".
-/// - BUSY ($764E bit 0): `ORI (DISP_BUFF + $4E),$01` en $C8D5, $CA1D y
-///   $CCC3 al empezar a ejecutar; `ANI ...,$FE` en $CA88 al terminar.
-/// - SHIFT ($02) y DEF ($80): `AUTO_OFF_15` ($E3E8, `EAI $02` / `ANI
-///   $7F`) conmuta SHIFT y apaga DEF; `AUTO_OFF_16` ($E3EF, `EAI $80` /
-///   `ANI $FD`) al revés.
-/// - KANA ($04) y SMALL ($08): `AUTO_OFF_17` ($E3F6) mira PB3 del LH5810
-///   (modelo de exportación, que es el nuestro, ver `Pc1500::step`) y
-///   entonces conmuta SMALL ($E40C, `EAI $08`) y nunca KANA.
-/// - III ($10), II ($20), I ($40): `RSV_CHNG` ($CB69-$CB78) rota
-///   $40 → $20 → $10 → $40; `RES_KEY_CODE` ($CE8E) y su tabla de $CEC4
-///   confirman qué nivel es cada bit.
-/// - DE ($764F bit 0), G ($02), RAD ($04): `BCMD_DEGREE` ($C697) escribe
-///   $03, `BCMD_RADIAN` ($C6A4) $04 y `BCMD_GRAD` ($C6A8) $06; la propia
-///   ROM vuelve a leerlos para saber la unidad angular
+/// - `RESET_5` ($E04D-$E054) writes $41 to $764E (BUSY + I) and $43 to $764F (RUN + DE + G);
+///   `COLD_START_2` ($CA24) writes $23 to $764F (PRO + DE + G). The boot prompt is therefore
+///   `[$40, $23]`: "I", "DEG" and "PRO".
+/// - BUSY ($764E bit 0): `ORI (DISP_BUFF + $4E),$01` at $C8D5, $CA1D and $CCC3 when it starts
+///   running; `ANI ...,$FE` at $CA88 when it ends.
+/// - SHIFT ($02) and DEF ($80): `AUTO_OFF_15` ($E3E8, `EAI $02` / `ANI $7F`) toggles SHIFT and
+///   clears DEF; `AUTO_OFF_16` ($E3EF, `EAI $80` / `ANI $FD`) the other way round.
+/// - KANA ($04) and SMALL ($08): `AUTO_OFF_17` ($E3F6) looks at the LH5810's PB3 (export model,
+///   which is ours, see `Pc1500::step`) and then toggles SMALL ($E40C, `EAI $08`) and never KANA.
+/// - III ($10), II ($20), I ($40): `RSV_CHNG` ($CB69-$CB78) rotates $40 → $20 → $10 → $40;
+///   `RES_KEY_CODE` ($CE8E) and its table at $CEC4 confirm which level each bit is.
+/// - DE ($764F bit 0), G ($02), RAD ($04): `BCMD_DEGREE` ($C697) writes $03, `BCMD_RADIAN` ($C6A4)
+///   $04 and `BCMD_GRAD` ($C6A8) $06; the ROM itself reads them back to know the angle unit
 ///   (`ARX_MINUS_ARV_20`, $F85A).
-/// - RESERVE ($10), PRO ($20), RUN ($40): `BTN_MODE` ($CBA0) y
-///   `BTN_SHMODE` ($CB9C). Los bits $08 y $80 de $764F no se usan.
+/// - RESERVE ($10), PRO ($20), RUN ($40): `BTN_MODE` ($CBA0) and `BTN_SHMODE` ($CB9C). Bits $08 and
+///   $80 of $764F are not used.
 ///
-/// Coincide con `Lcdc_pc1500.cpp` de `PockEmul` (`COLOR(bit && On)`).
+/// The same as `PockEmul`'s `Lcdc_pc1500.cpp` (`COLOR(bit && On)`).
 const SYMBOL_BITS: [(Symbol, u32, u8); SYMBOL_COUNT - 1] = [
     (Symbol::Busy, 0x764E, 0x01),
     (Symbol::Shift, 0x764E, 0x02),
@@ -126,21 +115,17 @@ const SYMBOL_BITS: [(Symbol, u32, u8); SYMBOL_COUNT - 1] = [
     (Symbol::Run, 0x764F, 0x40),
 ];
 
-/// Decodifica las 156 columnas de la matriz del LCD a partir de la RAM de
-/// pantalla, leída con `read` (dirección → byte).
+/// Decodes the 156 columns of the LCD's matrix from the display RAM, read with `read` (address →
+/// byte).
 ///
-/// Cada columna es un byte
-/// con el bit 0 = fila superior y el bit 6 = fila inferior (el bit 7
-/// siempre a 0), la misma convención que `Pc1500::lcd_columns` del arnés
-/// y que la tabla de caracteres de la ROM.
+/// Each column is a byte with bit 0 = top row and bit 6 = bottom row (bit 7 always 0), the same
+/// convention as the harness's `Pc1500::lcd_columns` and as the ROM's character table.
 ///
-/// La RAM de pantalla son dos bloques de 78 bytes, $7600-$764D y
-/// $7700-$774D, en parejas par/impar: el byte par da las filas 0-3 y el
-/// impar las 4-6, cada uno en un nibble. El nibble BAJO de la pareja
-/// `ind`/`ind+1` es la columna `ind/2` (bloque $7600) o `ind/2 + 39`
-/// (bloque $7700); el nibble ALTO, esa misma columna + 78. Es decir:
-/// columnas 0-38 = nibbles bajos de $7600, 39-77 = bajos de $7700, 78-116
-/// = altos de $7600 y 117-155 = altos de $7700. Idéntico a `PockEmul`.
+/// The display RAM is two blocks of 78 bytes, $7600-$764D and $7700-$774D, in even/odd pairs: the
+/// even byte gives rows 0-3 and the odd one rows 4-6, each in a nibble. The LOW nibble of the pair
+/// `ind`/`ind+1` is column `ind/2` (block $7600) or `ind/2 + 39` (block $7700); the HIGH nibble,
+/// that same column + 78. That is: columns 0-38 = low nibbles of $7600, 39-77 = low ones of $7700,
+/// 78-116 = high ones of $7600 and 117-155 = high ones of $7700. The same as `PockEmul`.
 pub fn decode_columns<F: Fn(u32) -> u8>(read: F) -> [u8; DISPLAY_WIDTH] {
     let mut columns = [0; DISPLAY_WIDTH];
     for ind in (0..0x4E_u32).step_by(2) {
@@ -155,22 +140,20 @@ pub fn decode_columns<F: Fn(u32) -> u8>(read: F) -> [u8; DISPLAY_WIDTH] {
     columns
 }
 
-/// Estado visible del LCD tras la última llamada a
-/// [`Pc1500::display`] / [`Pc1500::update_display_buffer`].
+/// What the LCD shows after the last call to [`Pc1500::display`] /
+/// [`Pc1500::update_display_buffer`].
 #[derive(Debug, Clone)]
 pub struct DisplayController {
-    /// Buffer RGBA (156x7, fila a fila) con la paleta [`LCD_RGBA_ON`] /
-    /// [`LCD_RGBA_OFF`]. La GUI ya no lo usa (pinta el LCD directamente a
-    /// partir de [`DisplayController::columns`]), pero se conserva para
-    /// cualquier consumidor que quiera una textura.
+    /// RGBA buffer (156x7, row by row) with the palette [`LCD_RGBA_ON`] / [`LCD_RGBA_OFF`]. The GUI
+    /// no longer uses it (it paints the LCD straight from [`DisplayController::columns`]), but it
+    /// is kept for anyone who wants a texture.
     rgba_buffer: [u8; RGBA_SIZE],
-    /// Columnas decodificadas de la RAM de pantalla (ver
-    /// [`decode_columns`]), estén o no visibles.
+    /// Columns decoded from the display RAM (see [`decode_columns`]), whether visible or not.
     columns: [u8; DISPLAY_WIDTH],
-    /// Estado de cada indicador según la RAM de pantalla, indexado por
-    /// `Symbol as usize`, esté o no visible el LCD.
+    /// State of each indicator according to the display RAM, indexed by `Symbol as usize`, whether
+    /// the LCD is visible or not.
     symbol_buffer: [bool; SYMBOL_COUNT],
-    /// Si el LCD entero (matriz e indicadores) está encendido.
+    /// Whether the whole LCD (matrix and indicators) is on.
     lcd_on: bool,
 }
 
@@ -190,41 +173,37 @@ impl DisplayController {
         &self.rgba_buffer
     }
 
-    /// `true` si el LCD se ve encendido: máquina encendida y `DISP`
-    /// activado (ver [`Pc1500::display`]). Apagado, ni los puntos ni los
-    /// indicadores se ven, aunque la RAM de pantalla conserve su
-    /// contenido.
+    /// `true` if the LCD shows: machine on and `DISP` enabled (see [`Pc1500::display`]). Off,
+    /// neither the dots nor the indicators show, although the display RAM keeps its contents.
     #[must_use]
     pub const fn is_on(&self) -> bool {
         self.lcd_on
     }
 
-    /// Las 156 columnas de la matriz tal como están en la RAM de pantalla
-    /// (ver [`decode_columns`]). OJO: no tiene en cuenta
-    /// [`DisplayController::is_on`]; para lo que realmente se ve, usar
-    /// [`DisplayController::is_pixel_on`] o mirar también `is_on()`.
+    /// The 156 columns of the matrix as they are in the display RAM (see [`decode_columns`]). NOTE:
+    /// it does not take [`DisplayController::is_on`] into account; for what really shows, use
+    /// [`DisplayController::is_pixel_on`] or also look at `is_on()`.
     #[must_use]
     pub const fn columns(&self) -> &[u8; DISPLAY_WIDTH] {
         &self.columns
     }
 
-    /// `true` si el punto de la columna `x` (0-155, de izquierda a
-    /// derecha) y la fila `y` (0-6, de arriba abajo) se ve encendido.
-    /// Fuera de rango, `false`.
+    /// `true` if the dot at column `x` (0-155, left to right) and row `y` (0-6, top to bottom)
+    /// shows lit. Out of range, `false`.
     #[must_use]
     pub fn is_pixel_on(&self, x: usize, y: usize) -> bool {
         self.lcd_on && y < DISPLAY_HEIGHT && self.columns.get(x).is_some_and(|&c| (c >> y) & 1 != 0)
     }
 
-    /// `true` si el indicador `symbol` se ve encendido (siempre `false`
-    /// con el LCD apagado, y para [`Symbol::Battery`]).
+    /// `true` if the indicator `symbol` shows lit (always `false` with the LCD off, and for
+    /// [`Symbol::Battery`]).
     #[must_use]
     pub const fn is_symbol_on(&self, symbol: Symbol) -> bool {
         self.lcd_on && self.symbol_buffer[symbol as usize]
     }
 
-    /// Recalcula el estado visible a partir de las columnas e indicadores
-    /// ya decodificados y de si el LCD está encendido.
+    /// Works out what shows from the columns and indicators already decoded and from whether the
+    /// LCD is on.
     fn refresh(&mut self, columns: [u8; DISPLAY_WIDTH], symbols: [bool; SYMBOL_COUNT], lcd_on: bool) {
         self.columns = columns;
         self.symbol_buffer = symbols;
@@ -238,14 +217,11 @@ impl DisplayController {
 }
 
 impl Pc1500 {
-    /// Vuelve a leer la RAM de pantalla (matriz e indicadores) y deja en
-    /// [`DisplayController`] lo que se ve, con el LCD encendido si
-    /// `lcd_on`. Con `lcd_on == false` el panel entero, indicadores
-    /// incluidos, se ve apagado: en la máquina real todo es un único
-    /// cristal gobernado por la misma señal.
+    /// Reads the display RAM again (matrix and indicators) and leaves in [`DisplayController`] what
+    /// shows, with the LCD on if `lcd_on`. With `lcd_on == false` the whole panel, indicators
+    /// included, shows off: on the real machine it is all a single glass driven by the same signal.
     ///
-    /// Normalmente no hace falta llamarla: [`Pc1500::display`] lo hace
-    /// con el `lcd_on` correcto.
+    /// There is usually no need to call it: [`Pc1500::display`] does it with the right `lcd_on`.
     pub fn update_display_buffer(&mut self, lcd_on: bool) {
         let columns = decode_columns(|addr| self.read_byte(addr));
         let mut symbols = [false; SYMBOL_COUNT];
@@ -281,10 +257,10 @@ mod tests {
     #[test]
     fn symbol_bits_are_unique_and_battery_unmapped() {
         for (i, a) in SYMBOL_BITS.iter().enumerate() {
-            assert_ne!(a.0, Symbol::Battery, "Battery no tiene bit");
+            assert_ne!(a.0, Symbol::Battery, "Battery has no bit");
             for b in &SYMBOL_BITS[i + 1..] {
-                assert_ne!(a.0, b.0, "indicador repetido");
-                assert!(a.1 != b.1 || a.2 != b.2, "bit repetido: {a:?} {b:?}");
+                assert_ne!(a.0, b.0, "repeated indicator");
+                assert!(a.1 != b.1 || a.2 != b.2, "repeated bit: {a:?} {b:?}");
             }
         }
     }
@@ -327,7 +303,7 @@ mod tests {
         pc.update_display_buffer(false);
         let d = &pc.display;
         assert!(!d.is_on());
-        assert_eq!(d.columns()[0], 0x7F, "la RAM sigue ah\u{ed}");
+        assert_eq!(d.columns()[0], 0x7F, "the RAM is still there");
         for x in 0..DISPLAY_WIDTH {
             for y in 0..DISPLAY_HEIGHT {
                 assert!(!d.is_pixel_on(x, y));
@@ -345,10 +321,10 @@ mod tests {
         for addr in (0x7600..0x764E).chain(0x7700..0x774E) {
             pc.write_byte(addr, 0);
         }
-        // Pareja $7602/$7603: nibbles bajos → columna 1, altos → 79.
+        // Pair $7602/$7603: low nibbles → column 1, high ones → 79.
         pc.write_byte(0x7602, 0x21); // fila 0 en la columna 1, fila 1 en la 79
         pc.write_byte(0x7603, 0x40); // fila 6 en la columna 79
-        // Pareja $774C/$774D (la última): columnas 77 y 155.
+        // Pair $774C/$774D (the last one): columns 77 and 155.
         pc.write_byte(0x774C, 0x80); // fila 3 en la columna 155
         pc.write_byte(0x774D, 0x04); // fila 6 en la columna 77
         pc.update_display_buffer(true);
@@ -362,8 +338,8 @@ mod tests {
         assert!(d.is_pixel_on(1, 0));
         assert!(!d.is_pixel_on(1, 1));
         assert!(d.is_pixel_on(79, 6));
-        assert!(!d.is_pixel_on(DISPLAY_WIDTH, 0), "fuera de rango");
-        assert!(!d.is_pixel_on(1, 7), "fuera de rango");
+        assert!(!d.is_pixel_on(DISPLAY_WIDTH, 0), "out of range");
+        assert!(!d.is_pixel_on(1, 7), "out of range");
         let rgba = |x: usize, y: usize| {
             let i = (y * DISPLAY_WIDTH + x) * 4;
             [d.rgba_buffer()[i], d.rgba_buffer()[i + 1], d.rgba_buffer()[i + 2], d.rgba_buffer()[i + 3]]
