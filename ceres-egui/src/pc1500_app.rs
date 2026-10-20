@@ -8,12 +8,27 @@ use crate::pacing::{self, Pacer, SpeedMode};
 use ceres_core::{HostEvent, Key as Pc1500Key, KeyStroke, Pc1500, ShiftPolicy};
 use eframe::egui;
 use std::mem;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Notice shown while the machine is off (the `OFF` key or the ROM's automatic power-off): without
 /// it, with the LCD blank, the emulator would look hung.
 const POWERED_OFF_HINT: &str = "Off \u{2014} press ON (Esc)";
+
+/// Runs one step of the emulation, catching a panic of the core instead of letting it close the
+/// window: the CPU panics on an instruction the emulator does not know (`POINT` beyond the screen
+/// makes the ROM run the undocumented `&98`, a machine-code program can jump into data...). It
+/// returns the panic's message.
+fn run_guarded(step: impl FnOnce()) -> Result<(), String> {
+    panic::catch_unwind(AssertUnwindSafe(step)).map_err(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "unknown error".to_string())
+    })
+}
 
 /// Limits of the speed slider (multiplier of real hardware time). Above some x150-x400 (depending
 /// on the host and on what the program does) the host rules, and the label says so.
@@ -119,6 +134,9 @@ pub struct Pc1500App {
     /// If paused, `update()` never moves the emulator on by itself — only `step_once` does it, when
     /// the step button is clicked.
     paused: bool,
+    /// Why the emulation stopped, if the core panicked (see `run_guarded`): the machine is left as
+    /// it was and nothing more is emulated until Reset or a `.lh5` is loaded.
+    stopped: Option<String>,
     /// Set to `true` by the GUI's "Step" button: forces exactly one `update_emulator()` in the next
     /// `update()`, even while paused — to move on frame by frame during an analysis.
     step_once: bool,
@@ -174,6 +192,7 @@ impl Pc1500App {
             max_speed: false,
             pacer: Pacer::new(),
             paused: false,
+            stopped: None,
             step_once: false,
         };
         if let Some(StartupFile::Basic(path)) = startup {
@@ -186,7 +205,11 @@ impl Pc1500App {
     /// Loads a `.lh5` file into the emulator and updates the status message.
     pub fn load_lh5(&mut self, path: &Path) {
         self.lh5_status = match self.emulator.load_lh5_file(path) {
-            Ok(()) => Some(format!("Loaded: {}", path.display())),
+            Ok(()) => {
+                // A new program, with the PC at its start: the emulation can go on.
+                self.stopped = None;
+                Some(format!("Loaded: {}", path.display()))
+            }
             Err(e) => Some(format!("Error: {e}")),
         };
     }
@@ -205,6 +228,7 @@ impl Pc1500App {
     /// pace and speed measurement). The chosen speed (slider, "Max") is kept.
     pub fn reset(&mut self) {
         self.emulator.reset();
+        self.stopped = None;
         self.emulator.set_auto_power_off(self.auto_power_off);
         self.mouse_key = None;
         self.key_status = None;
@@ -447,9 +471,17 @@ impl Pc1500App {
     /// exactly one frame if "Step" was clicked. It returns `true` if the emulation is running (not
     /// paused).
     fn advance_emulation(&mut self, ctx: &egui::Context) -> bool {
+        if self.stopped.is_some() {
+            self.step_once = false;
+            self.pacer.pause();
+            return false;
+        }
         if self.step_once {
             self.step_once = false;
-            self.emulator.step_frame();
+            let emulator = &mut self.emulator;
+            if let Err(why) = run_guarded(|| emulator.step_frame()) {
+                self.stopped = Some(why);
+            }
             self.pacer.pause();
             return false;
         }
@@ -463,12 +495,15 @@ impl Pc1500App {
         let deadline = now + budget;
         let mode = self.speed_mode();
         let emulator = &mut self.emulator;
-        self.pacer.advance(
-            now,
-            mode,
-            || Instant::now() >= deadline,
-            |ticks| emulator.run_for_ticks(ticks),
-        );
+        let pacer = &mut self.pacer;
+        let result = run_guarded(|| {
+            pacer.advance(now, mode, || Instant::now() >= deadline, |ticks| emulator.run_for_ticks(ticks));
+        });
+        if let Err(why) = result {
+            self.stopped = Some(why);
+            self.pacer.pause();
+            return false;
+        }
         true
     }
 
@@ -482,6 +517,16 @@ impl Pc1500App {
             .on_hover_text("Also shows the LCD large, above the faceplate");
         if !self.emulator.is_powered_on() {
             ui.colored_label(egui::Color32::RED, egui::RichText::new(POWERED_OFF_HINT).strong());
+        }
+        if let Some(why) = &self.stopped {
+            ui.colored_label(
+                egui::Color32::RED,
+                egui::RichText::new(format!("Emulation stopped ({why}): press Reset")).strong(),
+            )
+            .on_hover_text(
+                "The CPU met an instruction the emulator cannot run. The machine is left as it was; \
+                 Reset switches it on again, or load a .lh5.",
+            );
         }
     }
 
@@ -1030,6 +1075,23 @@ fn speed_status_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An instruction the emulator does not know stops the emulation with its message instead of
+    /// closing the window: `&98` (what `POINT` beyond the screen makes the ROM run) at `&0100`.
+    #[test]
+    fn an_unknown_instruction_stops_the_emulation_without_closing_the_window() {
+        let path = std::env::temp_dir().join(format!("ceres-unknown-opcode-{}.lh5", std::process::id()));
+        std::fs::write(&path, [0x00, 0x01, 0x01, 0x00, 0x98]).unwrap_or_else(|e| panic!("{e}"));
+        let mut pc = Pc1500::new();
+        pc.load_lh5_file(&path).unwrap_or_else(|e| panic!("{e}"));
+        let _ = std::fs::remove_file(&path);
+        let result = run_guarded(|| {
+            pc.step_frame();
+        });
+        let why = result.expect_err("the CPU does not know &98");
+        assert!(why.contains("0x98") && why.contains("0x0100"), "{why}");
+        assert_eq!(run_guarded(|| {}), Ok(()), "a step that does not panic");
+    }
 
     #[test]
     fn latched_prefixes_light_their_key() {
