@@ -1,8 +1,18 @@
-use crate::{Pc1500, lh5810};
+use crate::{Pc1500, host_io, lh5810};
 
-const PC1500_ROM_BYTES: &[u8] =
+pub(crate) const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
 const INITIAL_VALUE: u8 = 0xFF;
+
+/// Si es `true`, cada lectura o escritura a una dirección no mapeada se
+/// anuncia por `stdout`. Apagado por defecto: el arranque en frío de la
+/// ROM sondea a propósito memoria que no existe (RAM en $0000/$4800,
+/// ROMs de expansión en $8000-$B800, periféricos CE-150/CE-158 en
+/// $1B00A/$1B00B/$1DC00...) y esos ~30 mensajes por arranque solo
+/// ensuciaban la salida de la GUI y de los tests, además de escribir en
+/// `stdout` (bloqueante) desde el bucle caliente de la CPU. Ponerlo a
+/// `true` solo para depurar el mapa de memoria.
+const LOG_UNMAPPED: bool = false;
 
 // Historial de expansiones de RAM modeladas (cada una sustituyó a la
 // anterior — son módulos reales de Sharp, mutuamente excluyentes, que
@@ -35,6 +45,12 @@ const STANDARD_USER_MEMORY_END: u32 = 0x47FF;
 const STANDARD_USER_MEMORY_SIZE: usize =
     (STANDARD_USER_MEMORY_END - STANDARD_USER_MEMORY_BEGIN + 1) as usize;
 
+/// Primera dirección DESPUÉS de la RAM de usuario ($4800): lo que la ROM
+/// acaba encontrando como `RAM_END_H`:00 en su sondeo de `RESET`. La usa
+/// `basic.rs` (el `VAR_START` del programa de arranque, los límites al
+/// leer el programa de la RAM).
+pub(crate) const USER_MEMORY_END_EXCLUSIVE: u16 = (STANDARD_USER_MEMORY_END + 1) as u16;
+
 const STANDARD_USER_SYSTEM_MEMORY_BEGIN: u32 = 0x7600;
 const STANDARD_USER_SYSTEM_MEMORY_END: u32 = 0x7FFF;
 const STANDARD_USER_SYSTEM_MEMORY_SIZE: usize =
@@ -53,7 +69,7 @@ impl MemoryBus {
     pub fn new() -> Self {
         let mut standard_user_memory = [0; STANDARD_USER_MEMORY_SIZE];
 
-        const BATHYSCAP: &[u8] = include_bytes!("../../jackpot.bin");
+        const BATHYSCAP: &[u8] = include_bytes!("../../mole.bin");
 
         // Dirección de carga del fixture histórico tokenizado. Antes
         // `0x40C5` (elegida cuando `STANDARD_USER_MEMORY` llegaba hasta
@@ -141,12 +157,42 @@ impl Pc1500 {
                     [(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize]
             }
             ROM_BEGIN..=ROM_END => self.memory.rom[(addr - ROM_BEGIN) as usize],
+            // La tabla virtual de `CLOAD`/`CSAVE`/`MERGE`/`CHAIN`, solo
+            // con `PV`=0 (ver `host_io.rs`). Es de solo lectura: las
+            // escrituras caen en el brazo "no mapeado" de `write_byte`.
+            host_io::TABLE_BEGIN..=host_io::TABLE_END if !self.lh5801.pv() => {
+                host_io::rom_byte(addr)
+            }
             // Unmapped
             _ => {
-                println!("Read from unmapped address: {:#06X}", addr);
+                if LOG_UNMAPPED {
+                    println!("Read from unmapped address: {addr:#06X}");
+                }
                 INITIAL_VALUE
             }
         }
+    }
+
+    /// Un byte de la ventana de expansión de ME0 ($8000-$BFFF) como lo
+    /// vería la CPU con el `PV` dado, tenga el que tenga ahora (fuera de
+    /// esa ventana, el de [`Pc1500::read_byte`]).
+    ///
+    /// `PV` (patilla del LH5801) elige entre dos bancos de ROMs de
+    /// expansión en esa ventana: la CE-150 usa `PV`=0 $A000-$BFFF y la
+    /// CE-158 `PV`=1 $8000-$9FFF. El emulador solo pone ahí la tabla
+    /// virtual de `host_io.rs` ($9800-$9FFF con `PV`=0); lo demás se lee
+    /// vacío ($FF), como sin nada enchufado. Lo usa el lector de tablas
+    /// de palabras clave de `basic.rs`, que tiene que recorrer los dos
+    /// bancos como el tokenizador de la ROM sin cambiar el `PV` real.
+    pub(crate) fn read_banked(&self, addr: u16, pv: bool) -> u8 {
+        let wide = u32::from(addr);
+        if !(0x8000..0xC000).contains(&wide) {
+            return self.read_byte(wide);
+        }
+        if !pv && (host_io::TABLE_BEGIN..=host_io::TABLE_END).contains(&wide) {
+            return host_io::rom_byte(wide);
+        }
+        INITIAL_VALUE
     }
 
     pub fn write_byte(&mut self, addr: u32, value: u8) {
@@ -204,7 +250,9 @@ impl Pc1500 {
             }
             // Unmapped
             _ => {
-                println!("Write to unmapped address: {:#06X}", addr);
+                if LOG_UNMAPPED {
+                    println!("Write to unmapped address: {addr:#06X}");
+                }
             }
         }
     }
