@@ -717,9 +717,9 @@ mod tests {
     #[test]
     fn several_keys_combine_by_column() {
         let mut kb = Keyboard::new();
-        kb.press(Key::Two); // fila 0 bit 0
-        kb.press(Key::Dot); // fila 1 bit 0
-        kb.press(Key::Down); // fila 7 bit 7
+        kb.press(Key::Two); // row 0 bit 0
+        kb.press(Key::Dot); // row 1 bit 0
+        kb.press(Key::Down); // row 7 bit 7
         kb.set_ks(0x03);
         assert_eq!(kb.input(), 0xFE, "two rows, same column");
         kb.set_ks(0x83);

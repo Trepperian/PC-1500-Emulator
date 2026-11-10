@@ -88,7 +88,12 @@ strip = "symbols"
 debug-assertions = false
 overflow-checks = false
 lto = "fat"
-panic = "abort"
+# Not "abort": the window catches a panic of the core (an instruction the
+# emulator does not know, as the `&98` that `POINT` beyond the screen makes
+# the ROM run) and shows "Emulation stopped... press Reset" instead of closing
+# (`run_guarded` in `ceres-egui`). With "abort" that only worked in the tests,
+# which are always built with "unwind".
+panic = "unwind"
 incremental = false
 codegen-units = 1
 rpath = false

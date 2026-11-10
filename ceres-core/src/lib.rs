@@ -1,3 +1,4 @@
+mod after_new0;
 pub mod basic;
 pub mod display;
 pub mod harness;
@@ -129,7 +130,9 @@ pub struct Pc1500 {
 }
 
 impl Pc1500 {
-    /// A PC-1500 with the CE-161 expansion (user RAM `&0100-&47FF`).
+    /// A PC-1500 with the CE-161 expansion (user RAM `&0100-&47FF`), switched on after it was
+    /// initialized as the manual says (`NEW0`, and `NEW` in RESERVE mode): the ROM shows the `>`
+    /// prompt in PRO mode, with no program, every variable cleared and the reserve area empty.
     #[must_use]
     pub fn new() -> Self {
         Self::with_memory(MemoryBus::new())
@@ -138,10 +141,23 @@ impl Pc1500 {
     /// A PC-1500A with the CE-161 expansion: 4 KB more RAM, user RAM
     /// `&0100-&57FF`. Same ROM: A04 is the PC-1500A's ROM too (the version
     /// table at the top of Jeff Birt's listing: "A04 = ROM2 - PC1500 =
-    /// PC1500A = PC2").
+    /// PC1500A = PC2"). Initialized as [`Pc1500::new`].
     #[must_use]
     pub fn new_pc1500a() -> Self {
         Self::with_memory(MemoryBus::new_pc1500a())
+    }
+
+    /// A PC-1500 whose RAM was never initialized, as with new batteries: the ROM's cold start
+    /// shows `NEW0? :CHECK`, and `NEW0` leaves it as [`Pc1500::new`].
+    #[must_use]
+    pub fn new_blank() -> Self {
+        Self::with_memory(MemoryBus::blank())
+    }
+
+    /// As [`Pc1500::new_blank`], for a PC-1500A.
+    #[must_use]
+    pub fn new_pc1500a_blank() -> Self {
+        Self::with_memory(MemoryBus::blank_pc1500a())
     }
 
     /// Last address of user RAM of the emulated model.
@@ -158,7 +174,7 @@ impl Pc1500 {
     }
 
     fn with_memory(memory: MemoryBus) -> Self {
-        let mut pc = Self {
+        Self {
             lh5801: Lh5801::new(),
             memory,
             keyboard: Keyboard::new(),
@@ -170,9 +186,7 @@ impl Pc1500 {
             next_frame_hook_at: 0,
             feeder: KeyFeeder::new(),
             host_io: HostIo::default(),
-        };
-        pc.fix_boot_fixture();
-        pc
+        }
     }
 
     fn run(&mut self) {
@@ -309,10 +323,10 @@ impl Pc1500 {
         self.auto_power_off
     }
 
-    /// Restarts the machine as if its main batteries were taken out and put back but NOT the
-    /// clock's: everything goes back to the state of [`Pc1500::new`] (CPU, RAM with the boot
-    /// program, LCD, keyboard, LH5810...) and the ROM does a cold start (`NEW0? :CHECK`). The model
-    /// (PC-1500 or PC-1500A) is kept.
+    /// Restarts the machine as if its main batteries were changed (but NOT the clock's) and it was
+    /// initialized again as the manual says: everything goes back to the state of [`Pc1500::new`]
+    /// (CPU, RAM as after `NEW0`, LCD, keyboard, LH5810...) and the ROM shows the `>` prompt. The
+    /// model (PC-1500 or PC-1500A) is kept.
     ///
     /// # What survives the reset
     /// This is the complete list; any new state that must be kept has to be added here explicitly:
@@ -335,6 +349,19 @@ impl Pc1500 {
     /// [`Pc1500::ticks`] goes back to 0.
     pub fn reset(&mut self) {
         let fresh = if self.is_pc1500a() { Self::new_pc1500a() } else { Self::new() };
+        self.reset_to(fresh);
+    }
+
+    /// As [`Pc1500::reset`], but the RAM is left as with new batteries and NOT initialized (see
+    /// [`Pc1500::new_blank`]): the ROM shows `NEW0? :CHECK`, as after the real machine's ALL
+    /// RESET (IM p. 2). The same things survive.
+    pub fn reset_blank(&mut self) {
+        let fresh = if self.is_pc1500a() { Self::new_pc1500a_blank() } else { Self::new_blank() };
+        self.reset_to(fresh);
+    }
+
+    /// The machine becomes `fresh`, keeping what survives a reset (see [`Pc1500::reset`]).
+    fn reset_to(&mut self, fresh: Self) {
         let old = mem::replace(self, fresh);
         self.set_fast_halt(old.fast_halt());
         self.pd1990ac = old.pd1990ac;

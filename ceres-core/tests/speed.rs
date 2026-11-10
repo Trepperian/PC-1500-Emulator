@@ -314,7 +314,7 @@ fn lcd_never_blanks_at_slow_motion() {
 #[test]
 fn lcd_persistence_is_measured_in_emulated_ticks() {
     let mut pc = booted();
-    // `RIE` (FD BE), `RDP` (FD C0), `BCH -2` (9E 02): bucle infinito.
+    // `RIE` (FD BE), `RDP` (FD C0), `BCH -2` (9E 02): an endless loop.
     load_lh5(&mut pc, "speed_rdp_loop.lh5", 0x0100, &[0xFD, 0xBE, 0xFD, 0xC0, 0x9E, 0x02]);
     pc.run_for_ticks(20);
     assert!(!pc.cpu().display_enabled());

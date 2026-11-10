@@ -100,11 +100,11 @@ pub struct RtcDateTime {
     pub month: u8,
     /// Day of the month, 1-31.
     pub day: u8,
-    /// Hora, 0-23.
+    /// Hour, 0-23.
     pub hour: u8,
-    /// Minuto, 0-59.
+    /// Minute, 0-59.
     pub minute: u8,
-    /// Segundo, 0-59.
+    /// Second, 0-59.
     pub second: u8,
     /// Day of the week, 0-6 with Sunday = 0 (the data sheet's example: "July 16 (Sun.)" with a 0).
     /// The ROM sets it to 0 at each `TIME=`.
@@ -146,7 +146,7 @@ enum Base {
     Emulated,
 }
 
-/// Binario (0-99) a BCD.
+/// Binary (0-99) to BCD.
 const fn to_bcd(v: u8) -> u8 {
     ((v / 10) << 4) | (v % 10)
 }

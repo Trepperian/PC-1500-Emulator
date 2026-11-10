@@ -81,11 +81,11 @@ pub const KEY_HOLD_FRAMES: usize = 4;
 pub const KEY_RELEASE_FRAMES: usize = 4;
 
 /// Maximum of frames that [`Pc1500::boot`] waits for the ROM to reach the keyboard wait loop. In
-/// practice the cold start takes 36 frames (~0.4 emulated s: memory test, clearing the LCD and the
-/// `NEW0? :CHECK` message) and the whole [`Pc1500::boot`], with the `CL`, 46 (measured with the
-/// virtual table of `CLOAD`/`CSAVE` at $9800, whose initialization vector the ROM calls at boot:
-/// without it, they were 35 and 45); the limit only keeps a test from hanging if the emulator
-/// breaks.
+/// practice switching on takes 34 frames (~0.4 emulated s: memory test, clearing the LCD and the
+/// `>` prompt; 36 for a [`Pc1500::new_blank`], with the `NEW0? :CHECK` message) and the whole
+/// [`Pc1500::boot`], with the `CL`, 44 (46), measured with the virtual table of `CLOAD`/`CSAVE` at
+/// $9800, whose initialization vector the ROM calls at boot; the limit only keeps a test from
+/// hanging if the emulator breaks.
 pub const BOOT_MAX_FRAMES: usize = 600;
 
 /// Maximum of frames that [`Pc1500::enter_line`] waits for the ROM to finish processing a line and
@@ -154,7 +154,7 @@ impl Pc1500 {
         pc
     }
 
-    /// Ejecuta exactamente `frames` llamadas a [`Pc1500::step_frame`].
+    /// Runs exactly `frames` calls of [`Pc1500::step_frame`].
     pub fn run_frames(&mut self, frames: usize) {
         for _ in 0..frames {
             self.step_frame();
@@ -246,14 +246,11 @@ impl Pc1500 {
         })
     }
 
-    /// Boots the real ROM from a new `Pc1500` until it waits for the keyboard. After a cold start
-    /// the LCD shows `NEW0? :CHECK` (the ROM does not recognize the RAM as initialized); the first
-    /// key pressed only clears that message, which is why this method also presses `CL`, leaving
-    /// the LCD with the `>` prompt.
-    ///
-    /// The tokenized BASIC program that `MemoryBus::new()` puts in RAM at power-on (bathyscaph, at
-    /// $00C5) is still in memory after this (no `NEW` is done): a test that does not want it can
-    /// type `NEW\n`.
+    /// Boots the real ROM from a new `Pc1500` until it waits for the keyboard, and presses `CL`,
+    /// leaving the LCD with the `>` prompt in PRO mode. A [`Pc1500::new`] already starts at the
+    /// prompt, as after `NEW0`, with no program; the `CL` is for a [`Pc1500::new_blank`], whose
+    /// cold start shows `NEW0? :CHECK` (the ROM does not recognize the RAM as initialized) and
+    /// whose first key only clears that message.
     ///
     /// It returns the frames it took, or `None` if the ROM did not reach the prompt within
     /// [`BOOT_MAX_FRAMES`].

@@ -129,19 +129,19 @@ fn shift_def_latch() {
     assert!(!sym(&mut pc).contains(&Symbol::Def));
 }
 
-/// `SML` toggles SMALL and never KANA: the emulator is the export model (PB3 = 1, `AUTO_OFF_17`
-/// $E3F6).
+/// The `SML` key toggles SMALL and never the SML indicator (bit 2 of $764E, KANA on the Japanese
+/// model): the emulator is the export model (PB3 = 1, `AUTO_OFF_17` $E3F6).
 #[test]
 fn sml_toggle() {
     let mut pc = booted();
     tap(&mut pc, KeyStroke::plain(Key::Sml));
     let on = sym(&mut pc);
     assert!(on.contains(&Symbol::Small), "{on:?}");
-    assert!(!on.contains(&Symbol::Kana), "{on:?}");
+    assert!(!on.contains(&Symbol::Sml), "{on:?}");
     tap(&mut pc, KeyStroke::plain(Key::Sml));
     let after = sym(&mut pc);
     assert!(!after.contains(&Symbol::Small), "{after:?}");
-    assert!(!after.contains(&Symbol::Kana), "{after:?}");
+    assert!(!after.contains(&Symbol::Sml), "{after:?}");
 }
 
 /// `DEGREE` = DE + G, `RADIAN` = RAD, `GRAD` = G + RAD: three different segments (`G` and `RAD`
@@ -210,14 +210,28 @@ fn pixels_match_harness() {
     }
 }
 
-/// The ROM's idle keyboard loop turns `DISP` off ~1.3 ms at each turn (`WAIT_4_KB_17`, $E30D `RDP`
-/// ... $E313 `SDP`). Without the latch of `DISP`, each time a frame ended inside that pulse the GUI
-/// painted a frame with the LCD blank.
+/// The ROM's idle keyboard loop turns `DISP` off ~1.6 ms (`WAIT_4_KB_17`, $E30D `RDP`, `LOP` of
+/// $BC turns, $E313 `SDP`) at the turns its counters at $7B0B/$7B0C allow it. Without the latch of
+/// `DISP`, each time a frame ended inside that pulse the GUI painted a frame with the LCD blank.
+/// The same pulse, all the time, in machine code: whether the ROM gives it depends on the state of
+/// its counters, and whether a frame ends inside it on the phase of the frames.
 #[test]
 fn lcd_never_blanks_while_idle() {
     let mut pc = booted();
+    // $0100: `RIE`; then `RDP`, `LDI UL,$BC`, `LOP UL` (the ROM's pulse), `SDP`, as long with
+    // `DISP` on, and `BCH` back to the `RDP`.
+    let code = [0xFD, 0xBE, 0xFD, 0xC0, 0x6A, 0xBC, 0x88, 0x02, 0xFD, 0xC1, 0x6A, 0xBC, 0x88, 0x02, 0x9E, 0x0E];
+    let mut file = vec![0x00, 0x01, code.len() as u8, 0x00];
+    file.extend_from_slice(&code);
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("display_rdp_pulse.lh5");
+    if let Err(err) = fs::write(&path, &file) {
+        panic!("{}: {err}", path.display());
+    }
+    if let Err(err) = pc.load_lh5_file(&path) {
+        panic!("{}: {err}", path.display());
+    }
     let mut disp_off_at_boundary = 0;
-    for frame in 0..2000 {
+    for frame in 0..200 {
         pc.run_frames(1);
         if !pc.cpu().display_enabled() {
             disp_off_at_boundary += 1;

@@ -829,6 +829,12 @@ impl Pc1500 {
         self.cpu_writemem(addr, v);
     }
 
+    /// ADR: `R + A -> R` leaving the flags as they were, as `PockEmul` does. The Technical Manual
+    /// (p. 27) says C, H, Z and V change (`RL + A`), but the ROM counts on them not changing: the
+    /// routine that brings the next line to the input buffer ends with `POP A`, `ADR Y`, `RTN`
+    /// ($D2AA-$D2AE) and its caller branches on the carry it had before (`BCR` at $DCA0). With the
+    /// manual's flags, ↓ after `LIST` does not move to the next line (`tests/basic.rs`,
+    /// `host_load_then_list_edit`).
     fn adr(&mut self, reg: u16) -> u16 {
         let loc_t = self.lh5801.t;
         let rl = (reg & 0xFF) as u8;
@@ -1008,6 +1014,10 @@ impl Pc1500 {
         // println!("SJP to {:04X}", t);
     }
 
+    /// `VMJ`, `VEJ` and the conditional vectors (`VCS`...`VVS`). Taken, they clear Z, as the
+    /// Technical Manual says of VMJ and VEJ (p. 50-51); not taken, "the next instruction" follows
+    /// and Z is left as it was (p. 52-53). MAME and `PockEmul` clear Z in both cases (MAME's own
+    /// comment doubts it); nothing the ROM does tells them apart.
     fn vector(&mut self, doit: bool, nr: u8) {
         if doit {
             self.push_word(self.lh5801.p);
@@ -1017,8 +1027,8 @@ impl Pc1500 {
             // println!("VEC to {:04X} for vector {}", addr, nr);
 
             self.add_state(21 - 8);
+            self.set_zero_flag(false);
         }
-        self.set_zero_flag(false);
     }
 
     fn aex(&mut self) {
@@ -1089,8 +1099,10 @@ impl Pc1500 {
         self.lh5801.tm = value;
     }
 
+    /// ITA: the input port to A; only Z changes (Technical Manual p. 44, and MAME).
     fn ita(&mut self) {
         self.lh5801.a = self.keyboard.input();
+        self.check_z(self.lh5801.a);
     }
 
     fn instruction_fd(&mut self) {
@@ -1300,7 +1312,8 @@ impl Pc1500 {
             0x4b => {
                 let op = self.cpu_readop();
                 self.ora_mem(Self::me1(self.lh5801.x()), op);
-                self.add_state(14);
+                // 17, as the Technical Manual (p. 55-59) and MAME: 4 more than the ME0 form.
+                self.add_state(17);
             }
             0x4c => {
                 // OFF: switches the machine off (see the `!bf` branch of `step_cpu`). The ROM
@@ -1324,7 +1337,8 @@ impl Pc1500 {
             0x4f => {
                 let op = self.cpu_readop();
                 self.add_mem(Self::me1(self.lh5801.x()), op);
-                self.add_state(14);
+                // 17, as the Technical Manual (p. 55-59) and MAME: 4 more than the ME0 form.
+                self.add_state(17);
             }
             0x50 => {
                 let inc = self.inc(self.lh5801.yh());
@@ -1352,7 +1366,8 @@ impl Pc1500 {
             0x5b => {
                 let op = self.cpu_readop();
                 self.ora_mem(Self::me1(self.lh5801.y()), op);
-                self.add_state(14);
+                // 17, as the Technical Manual (p. 55-59) and MAME: 4 more than the ME0 form.
+                self.add_state(17);
             }
             0x5d => {
                 let read = self.cpu_readmem(Self::me1(self.lh5801.y()));
@@ -1372,7 +1387,8 @@ impl Pc1500 {
             0x5f => {
                 let op = self.cpu_readop();
                 self.add_mem(Self::me1(self.lh5801.y()), op);
-                self.add_state(14);
+                // 17, as the Technical Manual (p. 55-59) and MAME: 4 more than the ME0 form.
+                self.add_state(17);
             }
             0x60 => {
                 let inc = self.inc(self.lh5801.uh());
@@ -1396,7 +1412,8 @@ impl Pc1500 {
             0x6b => {
                 let op = self.cpu_readop();
                 self.ora_mem(Self::me1(self.lh5801.u()), op);
-                self.add_state(14);
+                // 17, as the Technical Manual (p. 55-59) and MAME: 4 more than the ME0 form.
+                self.add_state(17);
             }
             0x6d => {
                 let read = self.cpu_readmem(Self::me1(self.lh5801.u()));
@@ -1505,7 +1522,8 @@ impl Pc1500 {
             }
             0xb1 => {
                 self.lh5801.is_halted = true;
-                self.add_state(8);
+                // 9, as the Technical Manual (p. 45 and the table of p. 55-59).
+                self.add_state(9);
             }
             // Not in the official documentation, nor used in rom
             // 0xb8 => {
@@ -1527,6 +1545,12 @@ impl Pc1500 {
             0xc1 => {
                 self.lh5801.disp = true;
                 self.add_state(8);
+            }
+            0x8e => {
+                // CDV: clears the internal divider (TM p. 42): the count of states up to the next
+                // step of the timer starts again.
+                self.add_state(8);
+                self.lh5801.step_previous_state = self.lh5801.timer_state;
             }
             0xc8 => {
                 self.push(self.lh5801.a);

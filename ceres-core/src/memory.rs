@@ -1,4 +1,4 @@
-use crate::{Pc1500, host_io, lh5810};
+use crate::{Pc1500, after_new0, host_io, lh5810};
 
 pub(crate) const PC1500_ROM_BYTES: &[u8] =
     include_bytes!("../../Sharp_PC-1500_ROM_Disassembly/PC-1500_ROM-A04.bin");
@@ -74,64 +74,54 @@ pub struct MemoryBus {
 }
 
 impl MemoryBus {
-    /// Memory of a PC-1500 with the CE-161 expansion.
+    /// Memory of a PC-1500 with the CE-161 expansion, as the ROM leaves it after `NEW0` (see
+    /// [`MemoryBus::after_new0`]).
     pub fn new() -> Self {
-        Self::with_user_memory_end(STANDARD_USER_MEMORY_END)
+        Self::after_new0(STANDARD_USER_MEMORY_END)
     }
 
-    /// Memory of a PC-1500A with the CE-161 expansion.
+    /// Memory of a PC-1500A with the CE-161 expansion, as the ROM leaves it after `NEW0`.
     pub fn new_pc1500a() -> Self {
-        Self::with_user_memory_end(PC1500A_USER_MEMORY_END)
+        Self::after_new0(PC1500A_USER_MEMORY_END)
     }
 
-    fn with_user_memory_end(user_memory_end: u32) -> Self {
-        let mut standard_user_memory = [0; STANDARD_USER_MEMORY_SIZE];
+    /// Memory of a PC-1500 never initialized, as with new batteries: user RAM at 0 and system RAM
+    /// at `&FF`. The ROM's cold start then shows `NEW0? :CHECK`.
+    pub fn blank() -> Self {
+        Self::blank_with_user_memory_end(STANDARD_USER_MEMORY_END)
+    }
 
-        const BOOT_PROGRAM: &[u8] = include_bytes!("../../bathyscaph.bin");
+    /// As [`MemoryBus::blank`], for a PC-1500A.
+    pub fn blank_pc1500a() -> Self {
+        Self::blank_with_user_memory_end(PC1500A_USER_MEMORY_END)
+    }
 
-        // The BASIC program in RAM at power-on, only to have something to
-        // run while debugging (bathyscaph). It is where the ROM puts BASIC's
-        // program after `NEW0` with the CE-161 (`&00C5`, see
-        // `STANDARD_USER_MEMORY_BEGIN`), so a program loaded over it from
-        // the window (`Pc1500::load_basic_program`) also starts there, as
-        // on the real machine. It used to be `0x40C5` with the CE-155 and
-        // then `0x0100`.
-        const FIXTURE_LOAD_ADDR: u16 = 0x00C5;
-        let fixture_at = (FIXTURE_LOAD_ADDR as u32 - STANDARD_USER_MEMORY_BEGIN) as usize;
+    /// The RAM of a machine initialized as the manual says after changing the batteries (IM p. 2
+    /// and 142): `NEW0` in PRO mode, `NEW` in RESERVE mode, back to PRO, and switched off with
+    /// `OFF`. On switching it on, the ROM finds its RAM as it left it and shows the `>` prompt:
+    /// no program, every variable cleared (A-Z and A$-Z$ at 0) and the reserve area empty. The
+    /// bytes are the ROM's own, captured in `after_new0.rs` from a [`MemoryBus::blank`] machine.
+    fn after_new0(user_memory_end: u32) -> Self {
+        let mut memory = Self::blank_with_user_memory_end(user_memory_end);
+        let system_at = (after_new0::SYSTEM_RAM_BEGIN - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize;
+        memory.standard_user_system_memory[system_at..system_at + after_new0::SYSTEM_RAM.len()]
+            .copy_from_slice(&after_new0::SYSTEM_RAM);
+        let pc1500a = user_memory_end == PC1500A_USER_MEMORY_END;
+        let changes = after_new0::USER_RAM
+            .iter()
+            .chain(if pc1500a { after_new0::PC1500A_CHANGES } else { &[] });
+        for &(addr, value) in changes {
+            let addr = u32::from(addr);
+            if addr >= STANDARD_USER_SYSTEM_MEMORY_BEGIN {
+                memory.standard_user_system_memory[(addr - STANDARD_USER_SYSTEM_MEMORY_BEGIN) as usize] = value;
+            } else {
+                memory.standard_user_memory[(addr - STANDARD_USER_MEMORY_BEGIN) as usize] = value;
+            }
+        }
+        memory
+    }
 
-        // The ROM finds the end of a BASIC program by an `&FF` after its
-        // last line, and the end pointer (&7867) points at it. lhasm's
-        // `.bin` files do not include it, so it is added here; a file that
-        // already ends with it (the compiler's tokenized output) keeps its
-        // own. Without it, a program that runs past its last line stops
-        // with `ERROR 1`.
-        let program_len = match BOOT_PROGRAM.last() {
-            Some(0xFF) => BOOT_PROGRAM.len() - 1,
-            _ => BOOT_PROGRAM.len(),
-        };
-        standard_user_memory[fixture_at..fixture_at + program_len].copy_from_slice(&BOOT_PROGRAM[..program_len]);
-        standard_user_memory[fixture_at + program_len] = 0xFF;
-
-        let mut standard_user_system_memory = [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE];
-
-        let [addr_high, addr_low] = FIXTURE_LOAD_ADDR.to_be_bytes();
-
-        standard_user_system_memory[0x7861 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
-        standard_user_system_memory[0x7862 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
-
-        standard_user_system_memory[0x7865 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
-        standard_user_system_memory[0x7866 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
-
-        standard_user_system_memory[0x7869 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_high;
-        standard_user_system_memory[0x786A - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = addr_low;
-
-        let end = FIXTURE_LOAD_ADDR + program_len as u16;
-        let [end_high, end_low] = end.to_be_bytes();
-        standard_user_system_memory[0x7867 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_high;
-        standard_user_system_memory[0x7868 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = end_low;
-
-        standard_user_system_memory[0x79D0 - STANDARD_USER_SYSTEM_MEMORY_BEGIN as usize] = 0;
-
+    fn blank_with_user_memory_end(user_memory_end: u32) -> Self {
         let system_memory_end = if user_memory_end == PC1500A_USER_MEMORY_END {
             STANDARD_USER_SYSTEM_MEMORY_END
         } else {
@@ -139,8 +129,8 @@ impl MemoryBus {
         };
         Self {
             rom: PC1500_ROM_BYTES,
-            standard_user_memory,
-            standard_user_system_memory,
+            standard_user_memory: [0; STANDARD_USER_MEMORY_SIZE],
+            standard_user_system_memory: [INITIAL_VALUE; STANDARD_USER_SYSTEM_MEMORY_SIZE],
             user_memory_end,
             system_memory_end,
         }

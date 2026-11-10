@@ -159,7 +159,7 @@ pub enum PendingState {
     Ready,
     /// Keep waiting.
     Waiting,
-    /// Abandonar.
+    /// Give up.
     TimedOut,
 }
 

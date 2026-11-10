@@ -157,13 +157,13 @@ fn year_rollover() {
 fn invalid_month_is_error_23() {
     let mut pc = booted_at(FEB_28);
     enter(&mut pc, "TIME=131912.3045");
-    assert_eq!(pc.lcd_text().trim(), "ERROR 23", "mes 13");
+    assert_eq!(pc.lcd_text().trim(), "ERROR 23", "month 13");
     assert_eq!(pc.rtc_now().month, 2, "the clock does not change");
     clear(&mut pc);
 
     // Month 0 the ROM does accept (it only checks < $13).
     enter(&mut pc, "TIME=1012.0005");
-    assert_eq!(pc.rtc_now().month, 0, "mes 0");
+    assert_eq!(pc.rtc_now().month, 0, "month 0");
     clear(&mut pc);
     let shown = read_time_checked(&mut pc);
     assert!(shown.starts_with("1012.000"), "TIME after TIME=1012.0005: [{shown}]");
@@ -176,9 +176,9 @@ fn reset_keeps_the_clock() {
     enter(&mut pc, "TIME=101912.3045");
     clear(&mut pc);
     pc.reset();
-    // A real cold start...
+    // The machine starts again as after `NEW0`...
     assert!(pc.run_until_idle(600).is_some(), "boot after reset");
-    assert_eq!(pc.lcd_text().trim(), "NEW0? :CHECK", "cold start");
+    assert_eq!(pc.lcd_text().trim(), ">", "the prompt");
     // ...that keeps the clock and the automatic power-off option.
     assert!(!pc.auto_power_off(), "automatic power-off");
     clear(&mut pc);

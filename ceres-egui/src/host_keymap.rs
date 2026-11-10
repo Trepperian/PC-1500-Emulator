@@ -581,7 +581,7 @@ pub fn hint(key: Key) -> Option<String> {
     }
     for c in ' '..='~' {
         if c.is_ascii_lowercase() {
-            continue; // la letra ya sale en mayúscula
+            continue; // the letter already comes out in upper case
         }
         if let Some(stroke) = key_for_char(c) {
             add(stroke, char_label(c));
@@ -796,7 +796,7 @@ mod tests {
     #[test]
     fn text_edit_registry_excludes_registered_fields() {
         let mut registry = TextEditRegistry::default();
-        let field = egui::Id::new("ruta");
+        let field = egui::Id::new("path");
         let button = egui::Id::new("button");
         registry.register(field);
         assert!(registry.allows_capture(None));

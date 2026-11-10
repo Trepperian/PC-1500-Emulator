@@ -37,9 +37,11 @@ fn enter_line(pc: &mut Pc1500, line: &str) {
     }
 }
 
+/// A machine never initialized (new batteries): the ROM asks for `NEW0`. [`Pc1500::new`] starts
+/// after it, at the prompt (see `tests/boot_state.rs`).
 #[test]
 fn cold_boot_shows_new0_check_message() {
-    let mut pc = Pc1500::new_deterministic();
+    let mut pc = Pc1500::new_blank();
     let frames = pc.run_until_idle(BOOT_MAX_FRAMES);
     assert!(frames.is_some(), "the ROM did not reach WAIT_4_KB");
     assert!(pc.is_waiting_for_key(), "it should be in WAIT_4_KB");

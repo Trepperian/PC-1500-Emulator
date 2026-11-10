@@ -289,7 +289,7 @@ const CR: u8 = 0x0D;
 const COLON: u8 = b':';
 const END_MARK: u8 = 0xFF;
 
-// --- Errores ----------------------------------------------------------------
+// --- Errors -----------------------------------------------------------------
 
 const ERR_SYNTAX: u8 = 1;
 const ERR_LINE_NOT_FOUND: u8 = 11;
@@ -411,7 +411,7 @@ impl fmt::Display for HostEvent {
                 Ok(())
             }
             Self::Verified { path, bytes } => {
-                write!(f, "CLOAD? {}: coincide ({bytes} bytes)", path.display())
+                write!(f, "CLOAD? {}: it matches ({bytes} bytes)", path.display())
             }
             Self::Error { command, code, message } => {
                 write!(f, "{command}: ERROR {code} \u{2014} {message}")
@@ -424,7 +424,7 @@ impl fmt::Display for HostEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Pending {
     command: HostCommand,
-    /// Sufijo `a`.
+    /// The `a` suffix.
     ascii: bool,
 }
 

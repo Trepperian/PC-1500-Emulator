@@ -37,7 +37,9 @@ pub const SYMBOL_COUNT: usize = 15;
 pub enum Symbol {
     Busy,
     Shift,
-    Kana,
+    /// Bit 2 of $764E, named as in the Technical Manual's table of the display RAM (p. 98; KANA on
+    /// the Japanese model). The export model, the one emulated, never lights it.
+    Sml,
     Small,
     De,
     G,
@@ -57,7 +59,7 @@ impl Symbol {
     pub const ALL: [Self; SYMBOL_COUNT] = [
         Self::Busy,
         Self::Shift,
-        Self::Kana,
+        Self::Sml,
         Self::Small,
         Self::De,
         Self::G,
@@ -77,7 +79,7 @@ impl Symbol {
 /// A bit at 1 = indicator ON.
 ///
 /// `display.rs` used to read it the other way round (on with the bit at 0), and at boot showed
-/// BUSY, SHIFT, KANA, SML, II, III, DEF, RAD, RESERVE... just the opposite of the real machine.
+/// BUSY, SHIFT, SML, SMALL, II, III, DEF, RAD, RESERVE... just the opposite of the real machine.
 /// Every bit is confirmed in the A04 ROM itself:
 ///
 /// - `RESET_5` ($E04D-$E054) writes $41 to $764E (BUSY + I) and $43 to $764F (RUN + DE + G);
@@ -87,8 +89,9 @@ impl Symbol {
 ///   running; `ANI ...,$FE` at $CA88 when it ends.
 /// - SHIFT ($02) and DEF ($80): `AUTO_OFF_15` ($E3E8, `EAI $02` / `ANI $7F`) toggles SHIFT and
 ///   clears DEF; `AUTO_OFF_16` ($E3EF, `EAI $80` / `ANI $FD`) the other way round.
-/// - KANA ($04) and SMALL ($08): `AUTO_OFF_17` ($E3F6) looks at the LH5810's PB3 (export model,
-///   which is ours, see `Pc1500::step`) and then toggles SMALL ($E40C, `EAI $08`) and never KANA.
+/// - SML ($04, KANA on the Japanese model) and SMALL ($08): `AUTO_OFF_17` ($E3F6) looks at the
+///   LH5810's PB3 (export model, which is ours, see `Pc1500::step`) and then toggles SMALL ($E40C,
+///   `EAI $08`) and never SML.
 /// - III ($10), II ($20), I ($40): `RSV_CHNG` ($CB69-$CB78) rotates $40 → $20 → $10 → $40;
 ///   `RES_KEY_CODE` ($CE8E) and its table at $CEC4 confirm which level each bit is.
 /// - DE ($764F bit 0), G ($02), RAD ($04): `BCMD_DEGREE` ($C697) writes $03, `BCMD_RADIAN` ($C6A4)
@@ -101,7 +104,7 @@ impl Symbol {
 const SYMBOL_BITS: [(Symbol, u32, u8); SYMBOL_COUNT - 1] = [
     (Symbol::Busy, 0x764E, 0x01),
     (Symbol::Shift, 0x764E, 0x02),
-    (Symbol::Kana, 0x764E, 0x04),
+    (Symbol::Sml, 0x764E, 0x04),
     (Symbol::Small, 0x764E, 0x08),
     (Symbol::RomanIII, 0x764E, 0x10),
     (Symbol::RomanII, 0x764E, 0x20),
@@ -322,11 +325,11 @@ mod tests {
             pc.write_byte(addr, 0);
         }
         // Pair $7602/$7603: low nibbles → column 1, high ones → 79.
-        pc.write_byte(0x7602, 0x21); // fila 0 en la columna 1, fila 1 en la 79
-        pc.write_byte(0x7603, 0x40); // fila 6 en la columna 79
+        pc.write_byte(0x7602, 0x21); // row 0 in column 1, row 1 in column 79
+        pc.write_byte(0x7603, 0x40); // row 6 in column 79
         // Pair $774C/$774D (the last one): columns 77 and 155.
-        pc.write_byte(0x774C, 0x80); // fila 3 en la columna 155
-        pc.write_byte(0x774D, 0x04); // fila 6 en la columna 77
+        pc.write_byte(0x774C, 0x80); // row 3 in column 155
+        pc.write_byte(0x774D, 0x04); // row 6 in column 77
         pc.update_display_buffer(true);
         let d = &pc.display;
         let mut expected = [0_u8; DISPLAY_WIDTH];

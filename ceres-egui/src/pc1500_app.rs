@@ -30,6 +30,17 @@ fn run_guarded(step: impl FnOnce()) -> Result<(), String> {
     })
 }
 
+/// The machine the window switches on: as with new batteries (`blank`, the ROM shows
+/// `NEW0? :CHECK`) or as after `NEW0`.
+fn switch_on(pc1500a: bool, blank: bool) -> Pc1500 {
+    match (pc1500a, blank) {
+        (false, false) => Pc1500::new(),
+        (true, false) => Pc1500::new_pc1500a(),
+        (false, true) => Pc1500::new_blank(),
+        (true, true) => Pc1500::new_pc1500a_blank(),
+    }
+}
+
 /// Limits of the speed slider (multiplier of real hardware time). Above some x150-x400 (depending
 /// on the host and on what the program does) the host rules, and the label says so.
 const SPEED_MIN: f64 = 0.02;
@@ -52,6 +63,10 @@ const SYMBOL_DEF: u8 = 0x80;
 pub struct Pc1500App {
     // CORE EMULATOR - The real PC-1500 system
     emulator: Pc1500,
+    /// Whether the window was opened with no program: the machine then starts as with new
+    /// batteries, its RAM not initialized, and the ROM shows `NEW0? :CHECK` (see
+    /// [`Pc1500App::new`]); Reset goes back to that.
+    blank_start: bool,
 
     /// What the LCD shows, copied from the emulator only once per update (see `update_emulator`)
     /// and painted by `lcd_view::show` at each repaint.
@@ -146,8 +161,14 @@ impl Pc1500App {
     /// `startup`: the file of the command line, already sorted by its extension in `main.rs` (see
     /// `basic_io::StartupFile`): a `.lh5` is loaded at once, as always; a BASIC program goes in the
     /// queue and goes in as soon as the ROM finishes booting.
+    ///
+    /// With no file the machine is switched on as with new batteries: its RAM is not initialized
+    /// and the ROM shows `NEW0? :CHECK`, as the real PC-1500 does (IM p. 2 and 142). CL clears it,
+    /// and `NEW0` initializes the machine. With a file it starts initialized, as after `NEW0`, so
+    /// that the program works at once.
     pub fn new(_cc: &eframe::CreationContext<'_>, startup: Option<StartupFile>, pc1500a: bool) -> Self {
-        let mut emulator = if pc1500a { Pc1500::new_pc1500a() } else { Pc1500::new() };
+        let blank_start = startup.is_none();
+        let mut emulator = switch_on(pc1500a, blank_start);
         // The core starts with the file I/O disabled (`ERROR 27`); in the GUI, `CLOAD`/`CSAVE` use
         // the current folder.
         let host_dir = std::env::current_dir().ok();
@@ -165,6 +186,7 @@ impl Pc1500App {
 
         let mut app = Self {
             emulator,
+            blank_start,
             lcd: LcdFrame::BLANK,
             lcd_ghost: true,
             big_lcd: false,
@@ -214,7 +236,9 @@ impl Pc1500App {
         };
     }
 
-    /// Restarts the emulator from a clean boot (the same as switching it on again) — the only way
+    /// Restarts the emulator from a clean boot (the same as switching it on again: with the RAM not
+    /// initialized and `NEW0? :CHECK`, as the real machine's ALL RESET, if the window was opened
+    /// with no program; as after `NEW0` otherwise) — the only way
     /// back to the ROM's normal interactive BASIC after loading and running a `.lh5` of native
     /// machine code, which leaves the CPU stopped (`HALT`) and never goes back to the ROM's loop.
     /// Before this, the only way was to close and reopen the whole application (`Pc1500::new()` was
@@ -227,7 +251,11 @@ impl Pc1500App {
     /// survive. Here only the GUI's own state is cleared as well (the mouse's key, the `Pacer`'s
     /// pace and speed measurement). The chosen speed (slider, "Max") is kept.
     pub fn reset(&mut self) {
-        self.emulator.reset();
+        if self.blank_start {
+            self.emulator.reset_blank();
+        } else {
+            self.emulator.reset();
+        }
         self.stopped = None;
         self.emulator.set_auto_power_off(self.auto_power_off);
         self.mouse_key = None;
@@ -1093,6 +1121,20 @@ mod tests {
         assert_eq!(run_guarded(|| {}), Ok(()), "a step that does not panic");
     }
 
+    /// With no program the window switches on as the real machine with new batteries, `NEW0?
+    /// :CHECK`; with one, at the `>` prompt as after `NEW0`. The model is the one asked for.
+    #[test]
+    fn with_no_program_it_switches_on_as_with_new_batteries() {
+        for pc1500a in [false, true] {
+            for (blank, screen) in [(true, "NEW0? :CHECK"), (false, ">")] {
+                let mut pc = switch_on(pc1500a, blank);
+                assert_eq!(pc.is_pc1500a(), pc1500a);
+                assert!(pc.run_until_idle(600).is_some(), "switching on");
+                assert_eq!(pc.lcd_text().trim_end(), screen, "pc1500a={pc1500a} blank={blank}");
+            }
+        }
+    }
+
     #[test]
     fn latched_prefixes_light_their_key() {
         assert!(latched(Pc1500Key::Shift, SYMBOL_SHIFT));
@@ -1120,7 +1162,7 @@ mod tests {
         let verified = HostEvent::Verified { path: PathBuf::from("x"), bytes: 1 };
         let status = host_event_status(&verified);
         assert_eq!(status.kind, StatusKind::Ok, "verified");
-        assert_eq!(status.text, "CLOAD? x: coincide (1 bytes)", "text of the event");
+        assert_eq!(status.text, "CLOAD? x: it matches (1 bytes)", "text of the event");
     }
 
     #[test]

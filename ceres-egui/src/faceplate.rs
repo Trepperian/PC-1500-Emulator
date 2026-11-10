@@ -192,7 +192,7 @@ pub const CAPS: [CapDef; Key::COUNT] = {
         cap(K::Shift, 506.5, ROW_TOP, SIZE_TOP),
         cap(K::Off, 593.5, ROW_TOP, SIZE_TOP),
         cap(K::On, 635.5, ROW_TOP, SIZE_TOP),
-        // Fila Q.
+        // Row Q.
         cap(K::Q, 43.5, ROW_Q, SIZE_STD),
         cap(K::W, 85.5, ROW_Q, SIZE_STD),
         cap(K::E, 127.5, ROW_Q, SIZE_STD),
@@ -208,7 +208,7 @@ pub const CAPS: [CapDef; Key::COUNT] = {
         cap(K::Nine, 551.5, ROW_Q, SIZE_STD),
         cap(K::Slash, 592.5, ROW_Q, SIZE_STD),
         cap(K::Cl, 635.5, ROW_Q, SIZE_STD),
-        // Fila A.
+        // Row A.
         cap(K::A, 54.5, ROW_A, SIZE_STD),
         cap(K::S, 95.5, ROW_A, SIZE_STD),
         cap(K::D, 138.5, ROW_A, SIZE_STD),
@@ -223,7 +223,7 @@ pub const CAPS: [CapDef; Key::COUNT] = {
         cap(K::Six, 551.5, ROW_A, SIZE_STD),
         cap(K::Asterisk, 594.5, ROW_A, SIZE_STD),
         cap(K::Mode, 636.5, ROW_A, SIZE_STD),
-        // Fila Z.
+        // Row Z.
         cap(K::Z, 76.5, ROW_Z, SIZE_STD),
         cap(K::X, 117.5, ROW_Z, SIZE_STD),
         cap(K::C, 159.5, ROW_Z, SIZE_STD),
@@ -277,9 +277,9 @@ pub enum CapStyle {
     Dark,
     /// Functions, numbers, operators and arrows: grey, black label.
     Grey,
-    /// `CL`: roja.
+    /// `CL`: red.
     Red,
-    /// `SHIFT`: naranja.
+    /// `SHIFT`: orange.
     Orange,
 }
 
@@ -422,7 +422,7 @@ const SHIFT_LEGENDS: [(Key, PanelLegend); 13] = [
 const FUNCTION_KEYS: [Key; 6] = [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6];
 
 // ---------------------------------------------------------------------
-// Escalado.
+// Scaling.
 // ---------------------------------------------------------------------
 
 /// How the reference space is placed on the screen: origin (the top left corner of the case) and
@@ -472,7 +472,7 @@ impl Layout {
 }
 
 // ---------------------------------------------------------------------
-// Texturas procedurales.
+// Procedural textures.
 // ---------------------------------------------------------------------
 
 /// Size of the texture of the brushed aluminium.
@@ -546,7 +546,7 @@ fn channel(v: i32) -> u8 {
 }
 
 // ---------------------------------------------------------------------
-// Pintado.
+// Painting.
 // ---------------------------------------------------------------------
 
 /// What the faceplate needs to paint itself in a repaint.
@@ -1060,7 +1060,7 @@ mod tests {
         assert_eq!(a.len(), BRUSHED_W * BRUSHED_H);
         assert_eq!(a, brushed_pixels());
         for p in &a {
-            assert!((196..=219).contains(&p.g()), "gris {}", p.g());
+            assert!((196..=219).contains(&p.g()), "grey {}", p.g());
             assert_eq!(p.r(), p.g() + 2, "warm touch");
             assert_eq!(p.b(), p.g());
         }

@@ -37,7 +37,7 @@ const JEFF_BIRT_BATHY_HEADER: [u8; 27] = [
     0, 0, 0, 0x00, 0xC5, 0x03, 0x89, 0x04, 0x4F,
 ];
 
-// --- Ayudas -------------------------------------------------------------------
+// --- Helpers ------------------------------------------------------------------
 
 fn word(pc: &Pc1500, addr: u16) -> u16 {
     pc.read_word_be(u32::from(addr))
@@ -55,8 +55,7 @@ fn tempdir() -> TempDir {
     tempfile::tempdir().unwrap_or_else(|e| panic!("temporary folder: {e}"))
 }
 
-/// Machine booted, in PRO and without a folder, with `mole` as its program: loaded here so as not
-/// to depend on the emulator's boot program.
+/// Machine booted, in PRO and without a folder, with `mole` as its program.
 fn booted_without_dir() -> Pc1500 {
     let mut pc = Pc1500::new_deterministic();
     assert!(pc.boot().is_some(), "the ROM did not reach the prompt");
@@ -446,7 +445,7 @@ fn cload_verify() {
     let (mut pc, dir) = booted();
     enter(&mut pc, "CSAVE \"T2.BIN\"");
     enter(&mut pc, "CLOAD? \"T2.BIN\"");
-    assert_eq!(lcd(&pc), ">", "coincide");
+    assert_eq!(lcd(&pc), ">", "it matches");
     let path = dir.path().join("T2.BIN");
     assert_eq!(
         pc.take_host_events().pop(),
@@ -458,7 +457,7 @@ fn cload_verify() {
     changed[4] = b'N';
     write_file(dir.path(), "T2.BIN", &changed);
     enter(&mut pc, "CLOAD?\"T2.BIN\"");
-    assert_eq!(lcd(&pc), "ERROR 43", "no coincide");
+    assert_eq!(lcd(&pc), "ERROR 43", "it does not match");
     assert_eq!(pc.basic_program_bytes(), MOLE_BIN, "CLOAD? does not touch the memory");
 }
 

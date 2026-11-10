@@ -5,7 +5,7 @@
 //!
 //! The GUI used to create every frame an RGBA texture in pure black and white from
 //! `DisplayController::rgba_buffer` and wrote the indicators as normal egui labels in a separate
-//! row, outside the LCD (with names that are not the machine's: "SML", "DEG", "RSV"...). Now
+//! row, outside the LCD (with names that are not the machine's: "SML" for SMALL, "DEG", "RSV"...). Now
 //! everything is painted procedurally from the 156 columns of `DisplayController::columns`, without
 //! textures: a single `Mesh` per layer (ghosts, shadows, lit dots), so the cost is negligible even
 //! at maximum speed.
@@ -265,8 +265,8 @@ struct Annunciator {
     symbol: Symbol,
     x: u16,
     label: Label,
-    /// `false` for the segments this model never lights (KANA on the export model, which is the one
-    /// emulated; the battery, which we do not emulate): they are painted only when lit, never as a
+    /// `false` for the segments this model never lights (SML, bit 2 of $764E, KANA on the Japanese
+    /// model, on the export model, which is the one emulated; the battery, which we do not emulate): they are painted only when lit, never as a
     /// ghost, so as not to show a segment the user would not recognize.
     ghost: bool,
 }
@@ -276,7 +276,7 @@ struct Annunciator {
 const ANNUNCIATORS: [Annunciator; SYMBOL_COUNT] = [
     ann(Symbol::Busy, 2, Label::Word("BUSY")),
     ann(Symbol::Shift, 32, Label::Word("SHIFT")),
-    Annunciator { symbol: Symbol::Kana, x: 62, label: Label::Word("KANA"), ghost: false },
+    Annunciator { symbol: Symbol::Sml, x: 62, label: Label::Word("SML"), ghost: false },
     ann(Symbol::Small, 82, Label::Word("SMALL")),
     ann(Symbol::De, 114, Label::Word("DE")),
     ann(Symbol::G, 122, Label::Word("G")),
@@ -499,7 +499,7 @@ mod tests {
                 let pitch_px = grid.pitch * ppp;
                 let dot_px = grid.dot * ppp;
                 assert!((pitch_px - pitch_px.round()).abs() < 1e-4, "pitch {pitch_px} px");
-                assert!((dot_px - dot_px.round()).abs() < 1e-4, "punto {dot_px} px");
+                assert!((dot_px - dot_px.round()).abs() < 1e-4, "dot {dot_px} px");
                 assert!(pitch_px >= 2.0 && dot_px >= 1.0 && dot_px < pitch_px);
                 assert!(grid.pitch <= pitch.max(2.0 / ppp));
                 let ox = grid.origin.x * ppp;

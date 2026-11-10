@@ -634,7 +634,7 @@ mod tests {
         assert!(kb.is_pressed(Key::I), "the new one stays held");
         assert!(!kb.is_pressed(Key::H));
         assert!(frames.iter().all(|keys| keys.len() <= 1));
-        feeder.key_up(1); // la vieja ya no estaba: no pasa nada
+        feeder.key_up(1); // the old one was no longer down: nothing happens
         feeder.key_up(2);
         run(&mut feeder, &mut kb, BUSY, 1);
         assert!(!kb.is_pressed(Key::I));

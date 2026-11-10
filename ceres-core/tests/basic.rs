@@ -147,9 +147,9 @@ fn emulated_machine_has_the_main_and_host_tables() {
     let keywords = pc.basic_keywords();
     // The main one and the virtual table of `CLOAD`/`CSAVE` at $9800 with PV=0 (see `host_io.rs`);
     // no real expansion ROM.
-    assert_eq!(keywords.tables().len(), 2, "principal + $9800");
+    assert_eq!(keywords.tables().len(), 2, "main + $9800");
     assert_eq!(&keywords.tables()[0], KeywordTable::main_rom(), "the one at $C000 read from the emulated memory");
-    assert_eq!((keywords.tables()[1].base(), keywords.tables()[1].pv()), (0x9800, false), "la de $9800");
+    assert_eq!((keywords.tables()[1].base(), keywords.tables()[1].pv()), (0x9800, false), "the one at $9800");
     // CLOAD is from the table at $9800; LPRINT is only known when listing.
     assert_eq!(keywords.name(0xF089), Some(&b"CLOAD"[..]), "name of CLOAD");
     assert_eq!(keywords.tokenize_body(b"CLOAD").unwrap_or_default(), b"\xF0\x89", "CLOAD tokenized by $9800");
@@ -160,7 +160,7 @@ fn emulated_machine_has_the_main_and_host_tables() {
     assert_eq!(with.tokenize_body(b"LPRINT A").unwrap_or_default(), b"\xF0\xB9A", "LPRINT");
 }
 
-// --- Tokenizador ------------------------------------------------------------
+// --- Tokenizer --------------------------------------------------------------
 
 #[test]
 fn tokenize_rules() {
@@ -196,7 +196,7 @@ fn tokenize_rules() {
     // The apostrophe also disappears inside strings.
     assert_eq!(tok("\"IT'S\""), b"\"ITS\"", "apostrophe");
     // ':' after the number is kept in the body (tokenize_body knows nothing of line numbers).
-    assert_eq!(tok(":A=1"), b":A=1", "dos puntos");
+    assert_eq!(tok(":A=1"), b":A=1", "colon");
     // A token inside a string is ERROR 28.
     assert_eq!(
         tokenize_body(b"\"\xF0\x97\"", &main_tables()),
@@ -218,7 +218,7 @@ fn ascii_reader_rules() {
     let program = ascii("10:A=\u{3c0}*\u{221a}4\r\n20 PRINT\"\\x7F\"\n", true);
     let lines = program.lines();
     assert_eq!(lines[0].number, 10, "line 10");
-    assert_eq!(lines[0].body, [b'A', b'=', 0xF1, 0x5D, b'*', 0xF1, 0x6B, b'4'], "\u{3c0} y \u{221a}");
+    assert_eq!(lines[0].body, [b'A', b'=', 0xF1, 0x5D, b'*', 0xF1, 0x6B, b'4'], "\u{3c0} and \u{221a}");
     assert_eq!(lines[1].body, [0xF0, 0x97, b'"', 0x7F, b'"'], "\\xNN");
     // Without LIST format, the ':' is kept (as when typing `10:A=1`).
     assert_eq!(ascii("10:A=1", false).lines()[0].body, b":A=1", "faithful to the ROM");
@@ -236,7 +236,7 @@ fn ascii_reader_rules() {
     assert!(kinds.contains(&&WarningKind::SkippedNonProgramLines(1)), "{kinds:?}");
     assert!(kinds.contains(&&WarningKind::DuplicateLine), "{kinds:?}");
     assert!(kinds.contains(&&WarningKind::ApostropheDeleted), "{kinds:?}");
-    // Errores.
+    // Errors.
     let err = Program::from_ascii("10 A=\u{e9}", &Keywords::main_rom(), &AsciiOptions::default());
     assert_eq!(
         err.map(|_| ()),
@@ -392,33 +392,25 @@ fn rom_typed_equals_host() {
     assert_eq!(pc.basic_program_bytes(), typed, "basic_program_bytes");
 }
 
+/// The machine starts as after `NEW0` (see `tests/boot_state.rs`): no program, and the first line
+/// typed goes at $00C5 with its `$FF` after it.
 #[test]
-fn fixture_unchanged_and_fixed() {
-    let mut pc = Pc1500::new_deterministic();
-    assert!(pc.run_until_idle(600).is_some(), "boot");
-    assert_eq!(lcd(&pc), "NEW0? :CHECK", "boot screen");
-    // bathyscaph, where `NEW0` puts the program with the CE-161.
-    let end = 0x00C5 + u16::try_from(BATHYSCAPH_BIN.len()).unwrap_or(u16::MAX);
+fn starts_without_a_program() {
+    let mut pc = booted();
     assert_eq!(word(&pc, BASPRG_ST), 0x00C5, "BASPRG_ST");
     assert_eq!(word(&pc, BASPRG_EDT), 0x00C5, "BASPRG_EDT");
-    assert_eq!(word(&pc, BASPRG_END), end, "BASPRG_END");
-    assert_eq!(byte(&pc, end), 0xFF, "end $FF");
+    assert_eq!(word(&pc, BASPRG_END), 0x00C5, "BASPRG_END");
+    assert_eq!(byte(&pc, 0x00C5), 0xFF, "the $FF of an empty program");
     assert_eq!(word(&pc, VAR_START), 0x4800, "VAR_START");
-    assert_eq!(pc.basic_program_bytes(), BATHYSCAPH_BIN, "the boot program is bathyscaph.bin");
+    assert!(pc.basic_program_bytes().is_empty(), "no program");
 
-    let mut pc = booted();
     enter_line(&mut pc, "1020 A=2");
-    assert_eq!(word(&pc, BASPRG_END), end + 7, "the new line takes 7 bytes");
-    enter_line(&mut pc, "LIST 1015");
-    assert!(lcd(&pc).starts_with("1015:"), "LIST 1015: [{}]", lcd(&pc));
-    tap(&mut pc, Key::Down);
-    assert_eq!(lcd(&pc), "1020:A=2", "the new line in its place");
-    // It is the last one: below there is nothing more (before, without the $FF, garbage appeared),
-    // and above comes back 1015.
+    assert_eq!(word(&pc, BASPRG_END), 0x00C5 + 7, "the new line takes 7 bytes");
+    assert_eq!(byte(&pc, 0x00C5 + 7), 0xFF, "end $FF");
+    enter_line(&mut pc, "LIST");
+    assert_eq!(lcd(&pc), "1020:A=2", "LIST");
     tap(&mut pc, Key::Down);
     assert_eq!(lcd(&pc), "1020:A=2", "end of the program");
-    tap(&mut pc, Key::Up);
-    assert!(lcd(&pc).starts_with("1015:DATA"), "above, line 1015: [{}]", lcd(&pc));
 }
 
 #[test]
@@ -616,19 +608,23 @@ fn files_roundtrip_through_the_machine() {
 }
 
 #[test]
-fn load_right_after_cold_boot() {
+fn load_right_after_switching_on() {
     // What the GUI does after starting or clicking Reset: loading as soon as the ROM waits for the
-    // keyboard, still with `NEW0? :CHECK` on screen.
-    let mut pc = Pc1500::new_deterministic();
-    let ready = pc.run_until(600, Pc1500::is_at_basic_prompt);
-    assert!(ready.is_some(), "the ROM did not reach the prompt");
-    assert_eq!(lcd(&pc), "NEW0? :CHECK", "cold start");
-    let report = pc.load_basic_program(&tokenized(JACKPOT_BIN)).unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(report.start, 0x00C5, "where the boot program was");
-    assert!(pc.run_until_ready(100).is_some(), "ready");
-    tap(&mut pc, Key::Cl);
-    assert_eq!(lcd(&pc), ">", "CL clears the message");
-    enter_line(&mut pc, "LIST");
-    assert_eq!(lcd(&pc), "10:\"A\"REM  * JACKPOT*", "LIST of the one loaded");
-    assert_eq!(pc.basic_program_bytes(), JACKPOT_BIN, "in RAM");
+    // keyboard. Also on a machine never initialized, with `NEW0? :CHECK` still on screen.
+    for blank in [false, true] {
+        let mut pc = if blank { Pc1500::new_blank() } else { Pc1500::new_deterministic() };
+        let ready = pc.run_until(600, Pc1500::is_at_basic_prompt);
+        assert!(ready.is_some(), "the ROM did not reach the prompt");
+        assert_eq!(lcd(&pc), if blank { "NEW0? :CHECK" } else { ">" }, "switched on");
+        let report = pc.load_basic_program(&tokenized(JACKPOT_BIN)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(report.start, 0x00C5, "where NEW0 puts the program");
+        assert!(pc.run_until_ready(100).is_some(), "ready");
+        if blank {
+            tap(&mut pc, Key::Cl);
+            assert_eq!(lcd(&pc), ">", "CL clears the message");
+        }
+        enter_line(&mut pc, "LIST");
+        assert_eq!(lcd(&pc), "10:\"A\"REM  * JACKPOT*", "LIST of the one loaded");
+        assert_eq!(pc.basic_program_bytes(), JACKPOT_BIN, "in RAM");
+    }
 }

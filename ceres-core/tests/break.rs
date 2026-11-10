@@ -34,7 +34,7 @@ const SYMBOL_BUSY: u8 = 0x01;
 /// Maximum of frames waited for the ROM to serve a BREAK.
 const BREAK_MAX_FRAMES: usize = 500;
 
-/// Boots, deletes the boot program, types `program` and, if `run_mode`, goes to RUN mode with
+/// Boots, types `NEW` and `program` and, if `run_mode`, goes to RUN mode with
 /// `MODE`.
 fn setup(program: &[&str], run_mode: bool) -> Pc1500 {
     let mut pc = Pc1500::new_deterministic();

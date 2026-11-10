@@ -539,7 +539,7 @@ impl Default for Keywords {
     }
 }
 
-// --- Tokenizador (TOK_INBUF, $F957) --------------------------------------
+// --- Tokenizer (TOK_INBUF, $F957) ----------------------------------------
 
 /// Internal result of the tokenizer: the body and what is worth warning about.
 struct Tokenized {
@@ -1404,30 +1404,6 @@ impl Pc1500 {
     pub(crate) fn write_word(&mut self, addr: u16, value: u16) {
         self.write_byte(u32::from(addr), (value >> 8) as u8);
         self.write_byte(u32::from(addr) + 1, (value & 0xFF) as u8);
-    }
-
-    /// Fixes the boot program that `MemoryBus::new()` puts in RAM (bathyscaph at $00C5, see
-    /// [`Pc1500::new`]) so that it is a valid BASIC program, as if it had been loaded with
-    /// [`Pc1500::load_basic_program`]:
-    ///
-    /// - Writes the end `$FF` at `BASPRG_END` (if the file does not have it). Without it, the ROM
-    ///   goes on looking for lines in the zeros behind it: typing a new last line after booting put
-    ///   it in an absurd place and `LIST` showed garbage (`65535:~~ ...`).
-    /// - Sets `VAR_START` = the end of RAM (`RAM_END_H`:00, $4800 on a PC-1500 and $5800 on a
-    ///   PC-1500A), what `DEL_DIM_VAR` ($D091) would do. The cold start does not do it (only `RUN`,
-    ///   `NEW` and `CLEAR` do), so it stayed at $FFFF and a `DIM` in direct mode, or a `GOTO`
-    ///   without `RUN`, used an absurd base.
-    ///
-    /// The boot screen (`NEW0? :CHECK`), `LIST` and `RUN` do not change; in memory those 3 bytes
-    /// do.
-    pub(crate) fn fix_boot_fixture(&mut self) {
-        let start = self.read_word(BASPRG_ST);
-        let end = self.read_word(BASPRG_END);
-        let user_end = self.user_memory_end().wrapping_add(1);
-        if start <= end && end < user_end {
-            self.write_byte(u32::from(end), END_MARK);
-        }
-        self.write_word(VAR_START, user_end & 0xFF00);
     }
 
     /// `true` if the ROM is at BASIC's prompt waiting for the keyboard, the only moment the program
